@@ -132,7 +132,7 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `42208037616` | `b19f3ec` | 成功 | 原生设置页 VR 分区 + 景深修复 + 帧宽高比 + BACK 无缝退出；两 job 全绿；`7 suites / 75 tests / 0 failures` |
 | `42219713375` | `3cfcade` | 成功 | 手柄 combo 修复 + 长按 D-pad repeat（4 新测试）+ `setZOrderOnTop` 尝试；**真机进 VR 反而显示非 VR 界面** |
 | `42230809154` | `f77f482` | 成功 | 回退 `setZOrderOnTop` + 四文件加节流诊断日志；**用户据此抓 logcat，定位真正根因** |
-| 待运行 | 本次修复 | 待确认 | **修复 `VrModeHost` 的 `DisposableEffect` 竞态**（见 `HANDOFF.md` §12）；run ID 出来后补 |
+| **`42236078232`** | **`9c9cbc7`** | **成功** | **当前版本**：修复 `VrModeHost` 的 `DisposableEffect` 竞态（见 `HANDOFF.md` §12）；两 job 全绿、AAR/APK 两道 JNI 守卫 success；artifacts 385622 / 24349 / 47543881 B。**画面待真机复测** |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）；**`42192555168` 之后已不再闪退，

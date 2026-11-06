@@ -384,7 +384,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42215232161` | `72e803c` | 失败：`menuKeyClosesThePanelWhenItIsAlreadyOpen` 单测与 combo 键冲突 |
 | **`42219713375`** | **`3cfcade`** | **成功**：修复 combo 冲突 + 手柄长按 D-pad repeat（含 4 新测试）+ `setZOrderOnTop(true)` 层级尝试；两 job 全绿。**但真机实测进入 VR 显示的是「原本的非 VR 手机界面」，VR 层没出现** |
 | **`42230809154`** | **`f77f482`** | **成功**：回退 `setZOrderOnTop` + 四个 VR 文件加节流诊断日志（渲染逻辑不变）。用户装此版抓 logcat，据此定位真正根因（见 §12） |
-| 待运行 | 本次修复 | **修复 `VrModeHost` 的 `DisposableEffect` 竞态**（VR view 刚 onResume 就被误 onPause/onDestroy）——见 §12.4；run ID 待 CI 出来后补 |
+| **`42236078232`** | **`9c9cbc7`** | **成功：竞态修复版**。修复 `VrModeHost` 的 `DisposableEffect` 竞态（§12.4）；两 job 全绿、AAR/APK 两道 JNI 守卫 success、测试断言 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 24349 B、`opennow-vr-debug-arm64-v8a` 47543881 B。**画面效果待用户真机复测（§12.6）** |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
@@ -503,10 +503,10 @@ FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
 
 ## 11. 收尾检查清单
 
-- [x] **当前代码 run `42208037616` 全绿**，测试数 `75`、产物含两个 `.so`（已人工解包核验，见 8.4）
-- [x] run ID 已补进 `README-VR.md` 5.1、计划书 9.1、本文 8.4
+- [x] **当前代码 run `42236078232` 全绿**，两 job 全绿、AAR/APK 两道 JNI 守卫 success、测试断言 success、三个 artifact 齐全（见 8.4）
+- [x] run ID 已补进 `README-VR.md` 5.1、本文 8.4、§12.4
 - [x] 提交纪律已写入 8.1（纯文档提交用 `[skip ci]`，不重复触发构建）
-- [ ] 用户在 Android 10 真机按 3.3 复测并反馈（**唯一剩下的关键验证**）
+- [ ] 用户在新 APK（`9c9cbc7`）上按 §12.6 真机复测并反馈（**唯一剩下的关键验证**）
 - [ ] 工作区 `git status` clean，仓库内无 PAT 字面串残留
 - [ ] 提醒用户撤销并重新生成 PAT
 
@@ -553,7 +553,7 @@ commit 阶段执行时，`AndroidView.factory` 已经把**新建的** VrTheaterV
 于是旧 effect 的 onDispose 把**刚创建的新 view** 给 pause + destroy 了 —— 这就是 3ms 竞态，
 也解释了之前「有时黑屏、有时非 VR 界面」的不稳定症状。
 
-### 12.4 修复（commit 见 §8.4 最新行）
+### 12.4 修复（commit `9c9cbc7`，CI run `42236078232` 全绿）
 
 把 VR 视图封装进**仅在 `enabled==true` 时存在**的私有子 composable `VrTheaterHost`：
 
