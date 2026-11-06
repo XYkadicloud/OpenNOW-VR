@@ -1105,14 +1105,7 @@ private fun SettingsContent(
                 ) { enabled ->
                     viewModel.updateStreamSettings { s -> s.copy(browserClientMode = enabled) }
                 }
-                val switchHomeContext = LocalContext.current
-                SettingSwitch(
-                    label = stringResource(R.string.console_home_settings_label),
-                    checked = HomeUiState.useSwitchStyle.value,
-                    description = stringResource(R.string.console_home_settings_desc),
-                ) { enabled ->
-                    HomeUiState.set(switchHomeContext, enabled)
-                }
+                // OpenNOW-VR: the console/TV-style home toggle was removed together with that UI.
                 ChoiceRow(stringResource(R.string.settings_region), listOf(stringResource(R.string.option_auto)) + state.regions.map { it.name }, state.regions.firstOrNull { it.url == settings.stream.region }?.name ?: stringResource(R.string.option_auto)) { label ->
                     val url = state.regions.firstOrNull { it.name == label }?.url.orEmpty()
                     viewModel.updateStreamSettings { s -> s.copy(region = url) }

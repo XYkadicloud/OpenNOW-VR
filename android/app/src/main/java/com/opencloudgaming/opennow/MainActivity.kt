@@ -101,7 +101,6 @@ class MainActivity : ComponentActivity() {
         defaultRequestedOrientation = requestedOrientation
         volumeControlStream = AudioManager.STREAM_MUSIC
         val openNowApplication = application as OpenNowApplication
-        HomeUiState.load(this)
         pendingExternalLaunchIntent = intent
         // VR is an in-Activity overlay; load persisted settings before Compose starts.
         VrSession.attach(this)

@@ -985,9 +985,9 @@ private fun MainShell(
     val tvProfile = state.androidTvProfile
     val physicalControllerConnected = rememberPhysicalControllerConnected(enabled = !inStream)
     val spaceUi = shouldUseSpaceUi(state.settings.experimentalSpaceUi, state.page)
-    // The console shell owns the whole window on Home: it draws its own top bar, its own action row
-    // and its own icon rail, so the app rail, the status bar and the phone bottom bar stay out of it.
-    val consoleHome = HomeUiState.useSwitchStyle.value && state.page == AppPage.Home && !inStream
+    // OpenNOW-VR: the phone main screen ALWAYS uses the original phone HomeScreen.
+    // The console/TV-style UI was removed from the build because it renders incorrectly on phones.
+    // A non-compiling copy is kept under docs/ui-reference/ as a visual reference for the VR overlay.
     val spaceUiStateHolder = rememberSaveableStateHolder()
     val navAudioController = remember(context) { AndroidNerdAudioController(context.applicationContext) }
     var visibleSearchTarget by remember { mutableStateOf<SearchTarget?>(null) }
@@ -1106,7 +1106,7 @@ private fun MainShell(
             containerColor = Color.Transparent,
             contentWindowInsets = if (streamingActive || tvProfile || (spaceUi && horizontalChrome)) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
             bottomBar = {
-                if (!inStream && !showNavigationRail && !spaceUi && !consoleHome) {
+                if (!inStream && !showNavigationRail && !spaceUi) {
                     Column {
                         if (showMinimizedQueueDock) {
                             MinimizedQueueDock(
@@ -1169,13 +1169,7 @@ private fun MainShell(
                         false
                     },
             ) {
-                if (consoleHome) {
-                    ConsoleHomeScreen(
-                        state = state,
-                        viewModel = viewModel,
-                        tvProfile = tvProfile,
-                    )
-                } else if (spaceUi) {
+                if (spaceUi) {
                     Box(Modifier.fillMaxSize().padding(screenEdgePadding)) {
                         spaceUiStateHolder.SaveableStateProvider("space-ui") {
                             SpaceUiTheme {

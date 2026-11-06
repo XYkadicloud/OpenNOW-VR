@@ -9,16 +9,39 @@ import kotlin.math.sqrt
  *
  * Kept independent of android.opengl.Matrix so the maths can be verified by JVM unit tests.
  * Layout matches OpenGL: element [column * 4 + row].
+ *
+ * PERFORMANCE (low-end phones): the *Into variants write into a caller-owned array and allocate
+ * nothing. VrTheaterRenderer reuses a fixed set of matrices for every eye of every frame, so the
+ * render loop produces zero garbage. The allocating variants are kept for tests and callers that
+ * genuinely need a fresh array.
  */
 object VrMatrix4 {
     const val SIZE = 16
 
-    fun identity(): FloatArray = FloatArray(SIZE).also { it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f }
+    fun identity(): FloatArray = identityInto(FloatArray(SIZE))
+
+    /** Zero-allocation variant: resets [out] to the identity matrix and returns it. */
+    fun identityInto(out: FloatArray): FloatArray {
+        require(out.size == SIZE) { "4x4 matrix required" }
+        for (i in 0 until SIZE) out[i] = 0f
+        out[0] = 1f
+        out[5] = 1f
+        out[10] = 1f
+        out[15] = 1f
+        return out
+    }
 
     /** Returns lhs * rhs in column-major order (same semantics as Matrix.multiplyMM). */
-    fun multiply(lhs: FloatArray, rhs: FloatArray): FloatArray {
-        require(lhs.size == SIZE && rhs.size == SIZE) { "4x4 matrices required" }
-        val out = FloatArray(SIZE)
+    fun multiply(lhs: FloatArray, rhs: FloatArray): FloatArray =
+        multiplyInto(FloatArray(SIZE), lhs, rhs)
+
+    /**
+     * Zero-allocation variant of [multiply]. [out] must not alias [lhs] or [rhs]: the product is
+     * written element by element, so writing into an input would corrupt later reads.
+     */
+    fun multiplyInto(out: FloatArray, lhs: FloatArray, rhs: FloatArray): FloatArray {
+        require(out.size == SIZE && lhs.size == SIZE && rhs.size == SIZE) { "4x4 matrices required" }
+        require(out !== lhs && out !== rhs) { "output must not alias an input matrix" }
         for (column in 0..3) {
             for (row in 0..3) {
                 var sum = 0f
@@ -30,20 +53,42 @@ object VrMatrix4 {
     }
 
     /** Rotation matrix around an arbitrary axis, equivalent to glRotatef(angleRadians). */
-    fun rotation(axisX: Float, axisY: Float, axisZ: Float, angleRadians: Float): FloatArray {
+    fun rotation(axisX: Float, axisY: Float, axisZ: Float, angleRadians: Float): FloatArray =
+        rotationInto(FloatArray(SIZE), axisX, axisY, axisZ, angleRadians)
+
+    /** Zero-allocation variant of [rotation]. All 16 elements are overwritten, so no clear is needed. */
+    fun rotationInto(
+        out: FloatArray,
+        axisX: Float,
+        axisY: Float,
+        axisZ: Float,
+        angleRadians: Float,
+    ): FloatArray {
+        require(out.size == SIZE) { "4x4 matrix required" }
         val length = sqrt(axisX * axisX + axisY * axisY + axisZ * axisZ)
-        if (length < 1e-7f) return identity()
+        if (length < 1e-7f) return identityInto(out)
         val x = axisX / length
         val y = axisY / length
         val z = axisZ / length
         val c = cos(angleRadians)
         val s = sin(angleRadians)
         val t = 1f - c
-        return floatArrayOf(
-            t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0f,
-            t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0f,
-            t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0f,
-            0f, 0f, 0f, 1f,
-        )
+        out[0] = t * x * x + c
+        out[1] = t * x * y + s * z
+        out[2] = t * x * z - s * y
+        out[3] = 0f
+        out[4] = t * x * y - s * z
+        out[5] = t * y * y + c
+        out[6] = t * y * z + s * x
+        out[7] = 0f
+        out[8] = t * x * z + s * y
+        out[9] = t * y * z - s * x
+        out[10] = t * z * z + c
+        out[11] = 0f
+        out[12] = 0f
+        out[13] = 0f
+        out[14] = 0f
+        out[15] = 1f
+        return out
     }
 }

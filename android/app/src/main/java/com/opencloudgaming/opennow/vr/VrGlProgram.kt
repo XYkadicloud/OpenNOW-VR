@@ -2,7 +2,11 @@ package com.opencloudgaming.opennow.vr
 
 import android.opengl.GLES20
 
-/** Minimal GLES2 shader helpers. Extended in P1 with external-OES and panel texture programs. */
+/**
+ * Minimal GLES2 shader helpers. VrTheaterRenderer links two programs from this: a 2D panel program
+ * (sampler2D) and an optional video program (samplerExternalOES). Compilation happens at RUNTIME,
+ * so CI cannot catch a bad shader - the renderer wraps both links in runCatching.
+ */
 object VrGlProgram {
     fun createProgram(vertexSource: String, fragmentSource: String): Int {
         val vertex = compileShader(GLES20.GL_VERTEX_SHADER, vertexSource)

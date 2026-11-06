@@ -1,9 +1,11 @@
 # OpenNOW-VR 实施计划书（防幻觉基线）
 
-> 本文件是**唯一事实来源**。接手的实现模型必须先完整读完本文件，再动手改代码。
+> **入口提示**：接手的 Agent 请先读 [`docs/HANDOFF.md`](HANDOFF.md)（项目位置 / 当前真实状态 / 待办 / 文档索引），
+> 本文件是**技术事实基线**，两者配合；若两者冲突，一律以磁盘实测为准并同时修正两份。
 > 凡本文件标注「已核实」的内容，均来自本地实际拉取的源码或 GitHub API 返回结果，不要凭记忆改写。
 > 凡本文件标注「TODO」的部分，才是需要补写的内容。
-> 生成时间：2026-11-06；**第二版修订：同日按磁盘实际状态修正了第一版的虚标「已完成」，详见 6.1 节**。
+> 生成时间：2026-11-06；**第二版修订：同日按磁盘实际状态修正了第一版的虚标「已完成」，详见 6.1 节**；
+> **第三版修订：同日补记电视版 UI 移除、P1 落地、黑底渲染与低端机性能预算，见 12.4 / 12.5**。
 > 工作目录：`C:/Users/HP/WorkBuddy AI/2026-10-31-07-17-59/OpenNOW-VR`。
 
 ---
@@ -12,17 +14,19 @@
 
 | 项目 | 结论 |
 | --- | --- |
-| 目标仓库 | `https://github.com/XYkadicloud/OpenNOW-VR`（公开）。**存在与否以 Git remote / GitHub API 实测为准，不要假设已创建** |
+| 目标仓库 | `https://github.com/XYkadicloud/OpenNOW-VR`（公开）。分支 `main`，`origin` 已配置 |
 | 代码来源 | `XYkadicloud/OpenNOW-Android` 分支 `android-native` / HEAD `8811a74`，**整仓复制**后修改 |
 | 使用的 Google VR 接口 | **Google Cardboard SDK v1.36.0**（tag `v1.36.0`，2026-10-15 发布），源码已 vendor 到 `third_party/cardboard/` |
-| 用户要的产品形态 | **半 VR**：串流画面是**平面 2D**，放进 VR 空间的一块可放大幕布；UI/菜单在 VR 空间里；普通 2D 界面保留可切回 |
+| 用户要的产品形态 | **半 VR**：串流画面是**平面 2D**，放进**纯黑** VR 空间的一块可放大幕布；**不做 3D 场景**（省性能）；普通 2D 界面保留可切回 |
+| 主界面口径 | **原版手机版 `HomeScreen`**；电视版 UI 已从编译路径**完全移除**，源码仅留在 `docs/ui-reference/` 作 VR 视觉参考 |
 | 交互方式 | **纯物理手柄**。严禁凝视 / 眼球 / 注视选取 / 头部动作触发确认。头部姿态只允许改变视角 |
 | 首要可调项 | **串流窗口大小（放大画面）**；另有距离、亮度、曲率、垂直位置、立体/单屏、头部追踪、手柄死区等 |
 | 本机环境 | Windows，只有 JDK 8，**没有 Android SDK / Gradle / gh CLI**。所有编译与验证必须走 GitHub Actions |
-| 当前状态 | 依赖已装好、主工程接线与 CI 已落盘、纯逻辑层 + 6 个 JVM 测试类已实现；**P1 视频纹理接入、P3 面板渲染仍是 TODO，当前 VR 内只有纯色占位幕布** |
+| 目标设备 | **Android 10 / API 29 低端机**，只出 `arm64-v8a`；性能优化为硬要求，见 `HANDOFF.md` 第 9 节 |
+| 当前状态 | 主工程接线 / CI / 纯逻辑层已完成；**P1 视频纹理接入已实现**（OES SurfaceTexture → 平面幕布）、黑底渲染、电视版 UI 移除、渲染循环零堆分配已落盘（**真机未验证**）；**P3 手柄驱动的可见设置面板仍是 TODO**；JVM 测试 6 文件 / **64** 个 `@Test` |
 | 验收命令 | GitHub Actions `vr-build` 全绿；产出 `app-arm64-v8a-debug.apk` 工件 |
 
-**一句话**：不要重新设计架构，不要换 SDK，不要加 Activity，不要引入凝视控制。按第 8 节的 P1~P4 顺序把 TODO 填完，每步跑一次 CI。
+**一句话**：不要重新设计架构，不要换 SDK，不要加 Activity，不要引入凝视控制，不要把电视版 UI 放回主界面。接手后先查最新 CI run 并取回 Android 10 真机复测结论（`HANDOFF.md` 3.3 / 4 节），再补 P3。
 
 ---
 
@@ -321,7 +325,7 @@ OpenNOW-VR/
 │           ├── VrSession.kt                   # Android 状态层 + 输入分发（骨架）
 │           ├── VrVideoSurfaceRegistry.kt      # SurfaceTexture registry（骨架）
 │           ├── VrGlProgram.kt                 # GL shader helper（骨架）
-│           ├── VrTheaterRenderer.kt           # CardboardView.Renderer（骨架，TODO 重点）
+│           ├── VrTheaterRenderer.kt           # CardboardView.Renderer（黑底 + OES 平面 + 2D 面板，零分配）
 │           ├── VrTheaterView.kt               # CardboardView 子类（骨架）
 │           └── VrModeHost.kt                  # Compose 覆盖层（骨架）
 │   └── app/src/test/java/com/opencloudgaming/opennow/vr/   # 【新增】JVM 单测
@@ -354,7 +358,7 @@ OpenNOW-VR/
 | `VrSession.kt` | [骨架] | StateFlow 状态 + 命令分发已接好；`videoAspect` 写入与 GL 侧回调仍 TODO |
 | `VrVideoSurfaceRegistry.kt` | [骨架] | `install()` / `clear()` / `target()` / `currentTexture()` / `consumeFrameAvailable()` 已有；**`install()` 目前没有任何调用方** |
 | `VrGlProgram.kt` | [骨架] | 真实 API：`createProgram()`（**没有** `compileProgram()`）；纹理/缓冲封装 TODO |
-| `VrTheaterRenderer.kt` | [骨架][TODO] | 六个 `Renderer` 回调齐全，当前只画纯色占位幕布；**视频纹理、面板贴图是 TODO**。已修 `getTransformMatrix(stMatrix)` 单参数签名 |
+| `VrTheaterRenderer.kt` | [完成，真机未验证] | 六个 `Renderer` 回调齐全；**黑底 + `GL_TEXTURE_EXTERNAL_OES` 串流平面（P1 已实现）+ 无流时 2D Canvas 面板**；复用 UV、渲染循环零堆分配、平面顶点 50→4；`getTransformMatrix(stMatrix)` 单参数签名。**P3 手柄可交互设置面板仍是 TODO**。GLSL 运行时编译，CI 抓不到 shader 错误 |
 | `VrTheaterView.kt` | [骨架] | `CardboardView` 子类，生命周期 + `setStereoRenderMode` 已接；SDK 触摸层隐藏 TODO |
 | `VrModeHost.kt` | [骨架] | Compose `AndroidView` 覆盖层 + 进入/退出按钮 |
 | `README.md` / `README-VR.md` | [完成] | 英文 fork 说明 + 中文使用/开发说明（含诚实状态表） |
@@ -573,6 +577,12 @@ job 2: app (needs: cardboard-aar)
 | `42187431788` | `1fc4bd7` | **成功** | 两个 job 均 `success`；日志含 `> Task :app:testDebugUnitTest`、`BUILD SUCCESSFUL in 7m 7s`、`'app/build/outputs/apk/debug/app-debug.apk' -> '../out/app-arm64-v8a-debug.apk'`；artifacts：`cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B，`expired=False` |
 | `42189848032` | `fcdb892` | **成功** | 新增的 `Assert VR JVM tests actually ran` 步骤输出 `VR JVM test suites: 6 \| tests: 58 \| failures: 0 \| errors: 0 \| skipped: 0`，并逐个列出 6 个 `TEST-com.opencloudgaming.opennow.vr.*.xml`；与源码 6 个测试文件 / 58 个 `@Test` 一致。3 个 artifacts 齐全 |
 | `42192555168` | `11a4d69` | **成功** | 闪退修复版。`Verify the Cardboard JNI bridge is in the AAR` 与 `... in the APK` 两个守卫均 `success`；AAR 385622 B、APK 47565082 B。人工解包 APK 确认 `lib/arm64-v8a/libcardboard_sdk_jni.so`（21800 B）存在且含 `Java_com_google_cardboard_sdk_Initialize_nativeInitialize` 等 JNI 符号 |
+| `42194578267` | `4c67196` | **成功** | docs-only push 触发的回归验证；`build-cardboard-sdk-aar` 与 `vr-unit-tests-and-debug-apk` 两 job 全绿，确认事故复盘文档提交未破坏构建链 |
+
+> **真机实测（2026-11-06，用户反馈，优先级高于任何 CI 结论）**：run `42192555168` 之后的 APK
+> 点击「进入 VR」**不再闪退**，用户原话「其实能进入 VR 模式啊。当然那由于完全没有任何场景，
+> 所以说呢就啥也没有的状态」。据此确认 `libcardboard_sdk_jni.so` 修复生效；「啥也没有」是
+> 渲染内容为空的问题，已由 12.5 节的黑底 + 2D 纹理实现处理，**仍待真机复测**。
 
 > **历史限定（保留以便追溯）**：run `42187431788` 的日志当时**没有打印测试数量**，只能证明
 > `:app:testDebugUnitTest` 被调用且整体构建成功，不能据此断言「6 个测试类全部执行」。
@@ -634,8 +644,8 @@ grep -rh '@Test' android/app/src/test/java/com/opencloudgaming/opennow/vr | wc -
 1. CI 只能证明**可编译 + JVM 单测通过 + 能出 APK**。GFN 串流画面能否正确显示、手柄手感、纸盒畸变观感、不同手机陀螺仪表现，**均需真机验证**，本任务未验证。
 2. VR APK 目前只出 `arm64-v8a`；x86 模拟器跑不了 Cardboard 原生库，32 位 ARM 手机会 `INSTALL_FAILED_NO_MATCHING_ABIS`。
 3. `third_party/cardboard/sdk/qrcode/android/AndroidManifest.xml` 声明 `glEsVersion=0x00030000` 且 `required=true`（OpenGL ES 3.0）；极老设备会被 Play 过滤。Android 10 设备普遍满足。侧载不受 Play 过滤影响。
-4. **（2026-11-06 修正）** 第一版此处写「VR 模式下 `directSdrEnabled` 已强制 true」，是**幻觉**。`Streaming.kt` 实际为 `VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true`，而 `isActive` 定义为 `target != null`，`install()` 又没有任何调用方，因此它**恒为 false**，VR 目前不会改变 SDR/HDR 路径。该行为要等 P1 接入 `SurfaceTexture` 后才有意义。
-5. 视频宽高比需要在 P1 从 `onFrameResolutionChanged` 写入 `VrSession.videoAspect`；骨架暂用 16:9。
+4. **（2026-11-06 二次修正，P1 落地后）** 第一版写「VR 模式下 `directSdrEnabled` 已强制 true」是幻觉；中间版写「`install()` 没有任何调用方，恒为 false」**在 P1 落地后也已过时**。`Streaming.kt` 实际为 `VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true`，`isActive = target != null`；现在 `VrTheaterRenderer.onSurfaceCreated()` 会真正调用 `install()`，因此 VR 模式下 `isActive` 为 true、会走 SDR。**该行为仍未在真机串流中验证**。
+5. 视频宽高比仍取 `VrSession.videoAspect`（默认 16:9）。`VrTheaterRenderer.onDrawEye()` 会在 aspect 变化时自动重建幕布网格，但把 `Streaming.kt` 的帧尺寸回调写回 `videoAspect` 的接线**仍是 TODO，不要臆造 API**。
 6. 用户提供的 GitHub PAT 已在对话中明文出现，**工作结束后必须撤销并重新生成**；token 未写入任何仓库文件。
 
 ### 12.1 真机实测事故复盘（2026-11-06，Android 10 / API 29）
@@ -677,7 +687,7 @@ grep -rh '@Test' android/app/src/test/java/com/opencloudgaming/opennow/vr | wc -
 | QR 扫码 | `play-services-vision:20.1.3` | 无 GMS 的设备扫码配置 viewer 会失败，不影响 VR 主体 |
 | **真机运行** | **未验证** | CI 仅有 ubuntu runner，无模拟器/设备；「能装、不闪退」仍需用户实测 |
 
-### 12.3 上游 2.3.8 与主界面口径（2026-11-06 用户补充，待确认后执行）
+### 12.3 上游 2.3.8（2026-11-06 用户补充；已核实来源，适配受阻）
 
 **2.3.8 的真实来源**：不是 GitHub tag，而是应用内更新接口 `https://api.printedwaste.com/releases/opennow/latest` 返回的发布元数据：
 
@@ -689,12 +699,64 @@ uploadedSize=93140139  sha256=13f4b6241cb5ef2fcc7fef8f9c48396e13e0c0eeebb194d4bd
 
 已核实无可合并的公开源码：`XYkadicloud/OpenNOW-Android` 只有 `android-native`(2.3.0/186) 与 `zh-only`(2.2.9/185)；`OpenCloudGaming/OpenNOW-Android` 只有 1 个 Initial commit；`OpenCloudGaming/OpenNOW` 的 `main` 无 `android/` 目录。**因此「把 versionName 改成 2.3.8」不算适配**，只是改数字。正确做法需要用户提供 2.3.8 源码位置（仓库/分支/压缩包），再以 diff 方式迁移 NVST 修复并重新套用本 fork 的 VR 接线；若只有 release APK，则只能反编译比对，成本高且不可靠。
 
-**主界面口径**：用户明确要求**主界面不要用其修改的电视版桌面，使用原版手机版界面**；电视版桌面**仅作为 VR 界面的视觉参考**。
+### 12.4 电视版 UI 已完全移除（2026-11-06 用户追加，已执行）
 
-- 电视版桌面 = `ConsoleHomeScreen.kt`，当前唯一调用点在 `OpenNowScreens.kt:1173`。
-- 原版手机版基准 = 源仓库提交 `ef9b5ea^`（「add optional Switch-style home layout」之前），当时无 `SwitchHomeScreen.kt` / `ConsoleHomeScreen.kt`，主界面在 `OpenNowScreens.kt` 内。
-- 引入电视版的 `31e7a71` 改动 7 个文件（`ConsoleHomeScreen.kt` +530、`GameShortcuts.kt` +84、`OpenNowScreens.kt`、`OpenNowSettingsScreens.kt`、`OpenNowViewModel.kt`、`SwitchHomeScreen.kt` -265、`strings.xml`）。回退需三方 diff，避免丢失之后 5 个 commit 对同一文件的其他改动。
-- **执行前需用户确认**：「原版手机版」指 `ef9b5ea^` 的纯原版，还是保留 `d2ff516` 的 Switch-style home。
+用户原话：「建议你直接把那个电视版本的 UI 给完全去掉……我其实只需要汉化就行……由于这是用在手机上的，
+不是电视，所以没有必要电视 UI，所以说呢在手机上那个 UI 也是显示不正常的，所以要直接去掉……
+UI 全部换成原版的，只有 VR 模式可以参考那个我修改的那个 UI。」
+
+**核实到的根因**：`HomeUiState.useSwitchStyle` 定义在 `ConsoleHomeScreen.kt` 内且**默认 `true`**，
+`MainActivity.onCreate` 还调用 `HomeUiState.load(this)`，因此一装上来主界面就被
+`OpenNowScreens.kt` 的 `consoleHome` 分支接管成电视版。`31e7a71` 之前 Home 页的真实逻辑是
+`if (useSwitchStyle) SwitchStyleHomeScreen else HomeScreen`；`31e7a71` 把它改成无条件的
+`HomeScreen` 但在外层用 `consoleHome` 抢先接管。所以「原版手机版」= `HomeScreen(...)`，
+既不是 console shell 也不是 Switch-style home，无需再向用户确认基准。
+
+**已执行（可用 `grep` 复核）**：
+
+1. `ConsoleHomeScreen.kt` → `docs/ui-reference/ConsoleHomeScreen.kt.txt`（移出编译路径，仅作 VR 视觉参考）。
+2. `OpenNowScreens.kt`：删除 `val consoleHome = ...`、`bottomBar` 条件里的 `&& !consoleHome`、
+   以及 `if (consoleHome) { ConsoleHomeScreen(...) } else if (spaceUi)` 整个分支，Home 恒走 `HomeScreen`。
+3. `OpenNowSettingsScreens.kt`：删除 console-style home 开关（避免留下无效开关）。
+4. `MainActivity.kt`：删除 `HomeUiState.load(this)`（VR 接线 5 处未动）。
+5. `strings.xml`：删除 12 条 `console_home_*` 字符串。
+6. 复核命令（应无输出）：
+   `grep -rn -E 'ConsoleHomeScreen|HomeUiState|consoleHome|console_home_' android/app/src/main --include=*.kt --include=*.xml`
+
+**有意保留（非 UI，不属于「电视版桌面」）**：`GameShortcuts.kt` / `TvChannels.kt` /
+`TvPosterContentProvider.kt` 与 Manifest 里的 TV home-icon 声明。它们不产生手机 UI，且
+`MainActivity.kt:198` 的 `GameShortcuts.gameIdForLaunchComponent(...)` 仍被 deep-link 启动使用，
+删除会破坏既有功能。`console_shortcut_slot_*` 字符串因此也保留。
+若用户要求连这些一起清理，需单独评估 Manifest aliases 与 deep-link 的影响。
+
+### 12.5 VR 渲染现状与低端机性能（2026-11-06 追加）
+
+用户实测反馈：「其实能进入 VR 模式啊。当然那由于完全没有任何场景，所以说呢就啥也没有的状态」——
+**这条同时确认了 `libcardboard_sdk_jni.so` 闪退修复已生效**，剩余问题是渲染内容为空。
+
+- 旧状态：`VrTheaterRenderer` 只画一块极暗纯色 quad（`0.05/0.13/0.24`），无 UV、无纹理、无 `glClear`，
+  在纸盒里观感就是「啥也没有」。
+- 现已实现：纯黑背景（SDK 每帧清屏 + `glClearColor(0,0,0,1)`）、复用 `VrScreenGeometry` 的 UV、
+  `GL_TEXTURE_EXTERNAL_OES` 串流画面零拷贝贴到**同一块平面幕布**（P1 完成）、
+  无串流时显示 512×288 的 2D Canvas 状态面板（不是空白屏）。
+- **正确性硬约束**：SDK 的 `onRenderStereoFrame()` 绑定单个 FBO，左右眼只用 `glViewport` 分隔
+  且**没有 scissor**，SDK 自己已 `glClear`。**禁止在 `onDrawEye()` 里再 clear**，否则右眼清屏会抹掉左眼。
+- **GLSL 是运行时编译，CI 抓不到**：两个 program 都用 `runCatching` 链接，最坏是黑屏不是崩溃。
+  `#extension GL_OES_EGL_image_external : require` 必须是 fragment shader 第一个指令。
+- **性能预算全文见 `HANDOFF.md` 第 9 节**：渲染循环零堆分配、平面顶点 50→4、面板节流 200 ms、
+  无 blend/depth/MSAA/mipmap、亮度一次 fragment 乘法、`viewerMode=SIMULATION` 走官方单目路径
+  （`onDrawEye` 次数减半且跳过全屏畸变合成）。**未做降帧**：SDK `ChoreographerThread` 每 vsync
+  主动 `requestRender`，无官方降帧 API；**未默认降分辨率**：双目畸变模式下 `setScreenParams(w,h)`
+  参与视场计算，等比缩小未经真机验证。
+- **真机待验**：面板中文是否上下颠倒（若是，把 `VrTheaterRenderer.PANEL_FLIP_Y` 由 `0.0f` 改 `1.0f`）、
+  OES 串流方向、低端机帧率与发热。
+
+### 12.6 用户提出的「整个 2D UI 镜像进 VR」（可选，未实现，不要强求）
+
+用户建议「只套一个 VR 界面，里面所有东西都还是一样的 2D 界面，只是把它转换成 3D 渲染」。
+完整评估见 `HANDOFF.md` 2.2：需 `VirtualDisplay` + `Presentation`，但 ViewModel 状态不同步、
+输入路由要重接、每帧多一次全 UI 合成，与低端机省性能冲突。本 fork 采用的正确解法是
+「解码 Surface 零拷贝直连平面 + 轻量 2D 面板」，不要未做 PoC 就照字面硬改。
 
 ---
 

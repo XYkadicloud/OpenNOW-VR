@@ -57,9 +57,9 @@ internal object VrVideoSurfaceRegistry {
     }
 
     /**
-     * Detaches the decoder target. The GL thread owns the actual SurfaceTexture release; clearing
-     * here only drops references so the decoder immediately falls back to the normal 2D surface.
-     * TODO(P1): also release the Surface and delete the GL texture in onRendererShutdown.
+     * Detaches the decoder target. Clearing here only drops references so the decoder immediately
+     * falls back to the normal 2D surface. VrTheaterRenderer owns the actual Surface /
+     * SurfaceTexture / GL texture release in releaseVideoTexture() / onRendererShutdown().
      */
     fun clear() {
         target = null

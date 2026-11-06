@@ -95,4 +95,47 @@ class VrMatrix4Test {
             VrMatrix4.multiply(VrMatrix4.identity(), FloatArray(17))
         }
     }
+
+    // --- Zero-allocation render-loop paths ---------------------------------------------------
+
+    @Test
+    fun multiplyIntoMatchesAllocatingMultiplyAndReusesTheArray() {
+        val a = VrMatrix4.rotation(1f, 0f, 0f, 0.3f)
+        val b = VrMatrix4.rotation(0f, 1f, 0f, 0.8f)
+        val out = FloatArray(VrMatrix4.SIZE)
+        val returned = VrMatrix4.multiplyInto(out, a, b)
+        assertEqualsMatrix(VrMatrix4.multiply(a, b), out)
+        assertTrue("multiplyInto must write into the caller's array", returned === out)
+    }
+
+    @Test
+    fun multiplyIntoCanBeCalledRepeatedlyWithoutStaleValues() {
+        val a = VrMatrix4.rotation(1f, 0f, 0f, 0.3f)
+        val b = VrMatrix4.rotation(0f, 1f, 0f, 0.8f)
+        val out = FloatArray(VrMatrix4.SIZE)
+        VrMatrix4.multiplyInto(out, a, b)
+        VrMatrix4.multiplyInto(out, VrMatrix4.identity(), VrMatrix4.identity())
+        assertEqualsMatrix(VrMatrix4.identity(), out)
+    }
+
+    @Test
+    fun multiplyIntoRejectsAliasedOutput() {
+        val a = VrMatrix4.rotation(0f, 1f, 0f, 0.4f)
+        assertThrows(IllegalArgumentException::class.java) {
+            VrMatrix4.multiplyInto(a, a, VrMatrix4.identity())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VrMatrix4.multiplyInto(a, VrMatrix4.identity(), a)
+        }
+    }
+
+    @Test
+    fun identityIntoAndRotationIntoMatchAllocatingVariants() {
+        val identityOut = FloatArray(VrMatrix4.SIZE).also { it.fill(7f) }
+        assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.identityInto(identityOut))
+
+        val rotationOut = FloatArray(VrMatrix4.SIZE)
+        VrMatrix4.rotationInto(rotationOut, 0f, 1f, 0f, 0.65f)
+        assertEqualsMatrix(VrMatrix4.rotation(0f, 1f, 0f, 0.65f), rotationOut)
+    }
 }

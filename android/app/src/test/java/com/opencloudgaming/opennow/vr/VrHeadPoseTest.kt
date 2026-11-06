@@ -2,6 +2,7 @@ package com.opencloudgaming.opennow.vr
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.cos
 import kotlin.math.sin
@@ -96,5 +97,23 @@ class VrHeadPoseTest {
         assertThrows(IllegalArgumentException::class.java) {
             VrHeadPose.scaledRotation(FloatArray(3), 1f)
         }
+    }
+
+    // --- Zero-allocation render-loop path ----------------------------------------------------
+
+    @Test
+    fun scaledRotationIntoMatchesAllocatingVariantAndReusesTheArray() {
+        val q = quaternion(0.7f)
+        val out = FloatArray(VrMatrix4.SIZE)
+        val returned = VrHeadPose.scaledRotationInto(out, q, 0.5f)
+        assertEqualsMatrix(VrHeadPose.scaledRotation(q, 0.5f), out)
+        assertTrue("scaledRotationInto must write into the caller's array", returned === out)
+    }
+
+    @Test
+    fun scaledRotationIntoOverwritesStaleValuesOnIdentity() {
+        val out = FloatArray(VrMatrix4.SIZE).also { it.fill(9f) }
+        VrHeadPose.scaledRotationInto(out, floatArrayOf(0f, 0f, 0f, 1f), 1f)
+        assertEqualsMatrix(VrMatrix4.identity(), out, delta = 0f)
     }
 }

@@ -25,16 +25,20 @@
 | 部分 | 状态 |
 | --- | --- |
 | Cardboard SDK v1.36.0 源码 vendor + 必要补丁 | 已完成 |
-| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机） | 已完成，有 JVM 单测 |
-| Android 骨架层（VR 状态、Surface 注册、GL program、Renderer、CardboardView、Compose 覆盖层） | 已完成骨架 |
+| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机） | 已完成，有 JVM 单测（6 文件 / 64 个 `@Test`） |
+| Android 骨架层（VR 状态、Surface 注册、GL program、Renderer、CardboardView、Compose 覆盖层） | 已完成 |
 | 主工程接线（Gradle 依赖、MainActivity 输入与覆盖层、Streaming 解码 Surface hook、Manifest） | 已完成 |
-| `.github/workflows/vr-build.yml` 两阶段 CI（编 AAR → 单测 + 出 APK） | 已完成 |
-| **P1 视频纹理真正接入**（`GL_TEXTURE_EXTERNAL_OES` + SurfaceTexture 采样） | **TODO，尚未实现**，当前 VR 里是纯色占位幕布 |
-| **P3 VR 设置面板渲染**（Canvas Bitmap → 贴图 quad） | **TODO，尚未实现**，菜单模型与手柄命令已就绪但还没有可见面板 |
-| 真机 / 纸盒 / GFN 串流效果 | **未验证**。CI 只能证明「能编译 + 单测通过 + 能出 APK」 |
+| `.github/workflows/vr-build.yml` 两阶段 CI（编 AAR → 单测 + 出 APK）+ AAR/APK 二进制守卫 | 已完成 |
+| **电视版 UI 完全移除**，主界面回到原版手机版 `HomeScreen` | 已完成；源码仅留 `docs/ui-reference/` 作 VR 视觉参考 |
+| **P1 视频纹理接入**（`GL_TEXTURE_EXTERNAL_OES` + SurfaceTexture → 平面幕布） | **已实现**（零拷贝），**真机未验证** |
+| 纯黑背景 + 无串流时的 2D 状态面板（不再是空白屏） | 已实现，**真机未验证** |
+| 低端机性能优化（渲染循环零堆分配、顶点 50→4、面板节流、官方单目省电档） | 已实现，详见 `HANDOFF.md` 第 9 节 |
+| **P3 手柄驱动的可见 VR 设置面板** | **TODO**，菜单模型与手柄命令已就绪，当前面板只显示静态状态文字 |
+| 真机 / 纸盒 / GFN 串流效果 | **未验证**。CI 只能证明「能编译 + 单测通过 + 能出 APK」；GLSL 是运行时编译，CI 抓不到 |
 
-> 一句话：**框架和构建链已完成，视频接入和面板渲染还没做**。
-> 唯一事实来源是 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)，接手开发前请先完整读完。
+> 一句话：**框架、构建链、主界面回退、视频纹理和黑底渲染已完成，手柄设置面板还没做，画面效果仍待真机验证**。
+> 接手的 Agent 请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)（项目位置 / 状态 / 待办 / 文档索引），
+> 技术事实基线见 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)。
 
 ### 骨架刻意做成的「零影响」特性
 
@@ -107,10 +111,12 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 | `42187431788` | `1fc4bd7` | 成功 | 两个 job 全绿；日志含 `> Task :app:testDebugUnitTest` 与 `BUILD SUCCESSFUL in 7m 7s`；产物 `cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B |
 | `42189848032` | `fcdb892` | 成功 | 测试数量断言生效：`6 suites / 58 tests / 0 failures / 0 errors / 0 skipped` |
 | `42192555168` | `11a4d69` | 成功 | **进入 VR 闪退修复版**：AAR 与 APK 两层守卫确认 `libcardboard_sdk_jni.so` 已打进产物 |
+| `42194578267` | `4c67196` | 成功 | docs-only push 回归验证，两个 job 全绿 |
 
-> **真机提示**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
-> `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）。**请务必使用
-> `42192555168` 及之后的 APK 复测**，详见第 6 节与计划书 12.1 节。
+> **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
+> `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）；**`42192555168` 之后已不再闪退，
+> 用户反馈「其实能进入 VR 模式啊」**。当前剩余问题是 VR 内此前「啥也没有」，
+> 已改为黑底 + 2D 平面面板 / 串流纹理，**仍需用最新 APK 复测**，详见第 6 节与计划书 12.1 / 12.5 节。
 
 测试数量断言解析 `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0`
 且 `failures/errors == 0`，否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
@@ -131,18 +137,26 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 
 ## 6. 已知限制
 
-1. CI 只能证明可编译 + JVM 单测通过 + 能出 APK。**串流画面能否正确显示、手柄手感、纸盒畸变观感、陀螺仪表现，都必须真机验证**，本仓库尚未验证。
+1. CI 只能证明可编译 + JVM 单测通过 + 能出 APK；**GLSL shader 是运行时编译，CI 完全抓不到**。
+   **串流画面、2D 面板文字方向、手柄手感、纸盒畸变观感、陀螺仪、低端机帧率与发热都必须真机验证**。
 2. VR APK 只出 `arm64-v8a`；x86 模拟器跑不了 Cardboard 原生库。
 3. Cardboard SDK 的 manifest 要求 OpenGL ES 3.0，极老设备会被过滤。
-4. HDR 路径未针对 VR SurfaceTexture 单独验证；VR 模式下 `directSdrEnabled` 会强制为 true 走 SDR。
-5. 视频宽高比目前固定 16:9，P1 需要把 `Streaming.kt` 的帧尺寸回调写进 `VrSession.videoAspect`。
+4. HDR 路径未针对 VR SurfaceTexture 单独验证。`Streaming.kt` 的
+   `directSdrEnabled = { VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true }`：
+   P1 落地后 `VrTheaterRenderer.onSurfaceCreated()` 会真正 `install()`，因此 VR 模式下
+   `isActive` 为 true，会走 SDR；**此行为尚未在真机串流中验证**。
+5. 视频宽高比仍取 `VrSession.videoAspect`（默认 16:9），**尚未**把 `Streaming.kt` 的帧尺寸回调写回；
+   渲染器会在 aspect 变化时自动重建幕布网格，但回调接线仍是 TODO。
 6. 上游 SDK 的 `minSdkVersion` 从 26 补丁到 24 以匹配主工程；低版本设备的运行时行为未真机验证。
+7. 若真机上 2D 面板中文上下颠倒，把 `VrTheaterRenderer.PANEL_FLIP_Y` 由 `0.0f` 改为 `1.0f`。
+8. 上游 2.3.8 来自应用内更新接口而非 GitHub tag，目前无可合并公开源码，适配受阻（见计划书 12.3）。
 
 ---
 
 ## 7. 开发者入口
 
-- 计划 / 防幻觉基线：[`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)
+- **交接给下一个 Agent 的入口：[`docs/HANDOFF.md`](docs/HANDOFF.md)**（项目位置 / 真实状态 / 待办 / 文档索引 / 性能预算 / 防幻觉清单）
+- 计划 / 技术事实基线：[`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)
 - VR 模块源码：`android/app/src/main/java/com/opencloudgaming/opennow/vr/`
 - JVM 单测：`android/app/src/test/java/com/opencloudgaming/opennow/vr/`
 - CI：[`.github/workflows/vr-build.yml`](.github/workflows/vr-build.yml)
