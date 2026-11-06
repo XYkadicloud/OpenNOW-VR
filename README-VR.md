@@ -127,7 +127,9 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `42194578267` | `4c67196` | 成功 | docs-only push 回归验证，两个 job 全绿 |
 | `42198812193` | `1a489e9` | **成功** | **主代码验证**：主界面回退 + 黑底/OES 渲染 + 低端机优化。两 job 全绿；`6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；人工解包 APK 确认两个必需 `.so` 存在 |
 | `42200369358` | `bd0f6b4` | 成功 | docs + KDoc 注释改动的回归，两个 job 全绿 |
-| **`42202834080`** | **`e365e03`** | **成功** | **最终代码验证**：手机端 VR 设置面板 + 71 测试。两 job 全绿无失败步骤；`7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认两个必需 `.so` |
+| `42202834080` | `e365e03` | 成功 | 手机端 VR 设置面板版 + 71 测试；两 job 全绿 |
+| `42206935569` | `203e57a` | 失败 | `VrModeHost.kt` 漏 `setValue` import，已在后续提交修复 |
+| **`42208037616`** | **`b19f3ec`** | **成功** | **当前版本**：原生设置页 VR 分区 + 景深修复 + 帧宽高比 + BACK 无缝退出；两 job 全绿；`7 suites / 75 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认两个必需 `.so` |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）；**`42192555168` 之后已不再闪退，

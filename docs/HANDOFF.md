@@ -362,6 +362,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42200369358` | `bd0f6b4` | 成功：docs + KDoc 注释改动的回归；两个 job 全绿 |
 | **`42202834080`** | **`e365e03`** | **成功：手机端 VR 设置面板版**。手机 2D 端 VR 设置面板 + 7 个新增测试；两个 job 全绿、无失败步骤；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 23811 B、`opennow-vr-debug-arm64-v8a` 47548120 B |
 | `42206935569` | `203e57a` | **失败（已定位并修复）**：重写 `VrModeHost.kt` 时漏了 `import androidx.compose.runtime.setValue`，`:app:compileDebugKotlin` 报 `'MutableState<VrTheaterView?>' has no method 'setValue'`。**教训**：删掉 `by remember { mutableStateOf(...) }` 之外的 UI 时，别忘了它仍需要 `getValue` + `setValue` 两个 import |
+| **`42208037616`** | **`b19f3ec`** | **成功：当前交接版本**。原生设置页 VR 分区 + 景深逆旋转修复 + 真实帧宽高比 + BACK 无缝退出；两 job 全绿、无失败步骤；人工解包 `7 suites / 75 tests / 0 failures / 0 errors / 0 skipped`，APK 含两个必需 `.so`；artifacts 385622 / 23969 / 47535533 B |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
@@ -480,7 +481,7 @@ FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
 
 ## 11. 收尾检查清单
 
-- [x] **最终代码 run `42202834080` 全绿**，测试数 `71`、产物含两个 `.so`（已人工解包核验，见 8.4）
+- [x] **当前代码 run `42208037616` 全绿**，测试数 `75`、产物含两个 `.so`（已人工解包核验，见 8.4）
 - [x] run ID 已补进 `README-VR.md` 5.1、计划书 9.1、本文 8.4
 - [x] 提交纪律已写入 8.1（纯文档提交用 `[skip ci]`，不重复触发构建）
 - [ ] 用户在 Android 10 真机按 3.3 复测并反馈（**唯一剩下的关键验证**）
