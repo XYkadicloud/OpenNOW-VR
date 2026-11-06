@@ -361,6 +361,8 @@ internal class OpenNowVideoDecoderFactory(
     private val directJavaDecode: Boolean = false,
     private val directSdrEnabled: () -> Boolean = { false },
     private val requestTextureOutput: (String) -> Unit = {},
+    /** Transport hook used when a surface decoder must wait for its next keyframe. */
+    private val requestKeyFrame: () -> Unit = {},
 ) : VideoDecoderFactory {
     private val defaultFactory = DefaultVideoDecoderFactory(sharedContext)
     private val hardwareFactory = openNowHardwareVideoDecoderFactory(sharedContext)
@@ -374,7 +376,9 @@ internal class OpenNowVideoDecoderFactory(
         if (hdrEnabled()) {
             // Never let an HDR session fall through an 8-bit texture or software decoder.
             return if (codec == VideoCodec.H265) {
-                hdrSurfaceDecoder(requestedFps(), decoderSurface, surfacePresentationMode)
+                hdrSurfaceDecoder(
+                    requestedFps(), decoderSurface, surfacePresentationMode, requestKeyFrame,
+                )
             } else null
         }
         val hardwareDecoder = if (codec != null) hardwareFactory.createDecoder(info) else null
@@ -482,7 +486,8 @@ internal class OpenNowVideoDecoderFactory(
             return textureDecoder
         }
         val surfaceDecoder = MediaCodecSurfaceVideoDecoder(exactRequestedFps, decoderSurface,
-            hdr = false, presentationMode = surfacePresentationMode) { width, height, rate ->
+            hdr = false, presentationMode = surfacePresentationMode,
+            requestKeyFrame = requestKeyFrame) { width, height, rate ->
             sdrSurfaceDecoderConfiguration(codec, hardwareDecoderImplementation, width, height, rate,
                 tuneSelectedDecoder && !tuningRejected, nativeLowLatencyDecoderEnabled && !tuningRejected,
                 standardLowLatencyEnabled && !tuningRejected)

@@ -59,6 +59,13 @@ internal class MediaCodecSurfaceVideoDecoder(
     private val surface: () -> DecoderSurfaceTarget?,
     private val hdr: Boolean,
     private val presentationMode: SurfacePresentationMode = SurfacePresentationMode.MediaCadence,
+    /**
+     * Called (throttled) while delta frames are dropped because the codec was just configured
+     * or pointed at a new Surface. VR enter/exit reconfigures the target mid-stream, so waiting
+     * for the 5 s media-stall watchdog would leave the headset black for seconds. Transports that
+     * already request keyframes themselves (NVST) can leave this empty.
+     */
+    private val requestKeyFrame: () -> Unit = {},
     private val configuration: (Int, Int, Int) -> SurfaceDecoderConfiguration?,
 ) : VideoDecoder {
     private data class FrameInfo(val timestampNs: Long, val rotation: Int, val queuedAtMs: Long, val size: Int)
@@ -88,6 +95,7 @@ internal class MediaCodecSurfaceVideoDecoder(
     // entry per frame. nextPtsUs increases, so the first key is the oldest input.
     private val frames = LongSparseArray<FrameInfo>()
     private var needsKeyFrame = true
+    private var lastKeyFrameRequestAtMs = 0L
     private var running = false
     private var callbackThread: HandlerThread? = null
     @Volatile var failureReason: String? = null
@@ -102,6 +110,7 @@ internal class MediaCodecSurfaceVideoDecoder(
             callback = decodeCallback
             failureReason = null
             needsKeyFrame = true
+            lastKeyFrameRequestAtMs = 0L
             callbackThread = HandlerThread("OpenNOW-surface-codec").also { it.start() }
             running = true
         }
@@ -124,6 +133,18 @@ internal class MediaCodecSurfaceVideoDecoder(
         // Report NO_OUTPUT rather than ERROR so WebRTC/NVST requests a keyframe instead of
         // classifying the whole media session as broken. The frame is simply dropped.
         if (needsKeyFrame && frame.frameType != EncodedImage.FrameType.VideoFrameKey) {
+            // Entering/leaving VR changes the decoder target, and stopCodecLocked() above always
+            // re-arms needsKeyFrame. Ask for the keyframe now instead of waiting for the 5 s
+            // media-stall watchdog; repeated drops inside the throttle window are free.
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastKeyFrameRequestAtMs >= KEYFRAME_REQUEST_INTERVAL_MS) {
+                lastKeyFrameRequestAtMs = nowMs
+                try {
+                    requestKeyFrame()
+                } catch (_: Exception) {
+                    // A transport shutting down must not affect frame dropping.
+                }
+            }
             return@synchronized VideoCodecStatus.NO_OUTPUT
         }
         try {
@@ -343,5 +364,10 @@ internal class MediaCodecSurfaceVideoDecoder(
                 "MediaCodec direct surface progress input=$inputCount output=$outputCount presented=$presentedCount " +
                     "pending=${pendingFrames.size} inCodec=${frames.size()} queuedBytes=$queuedBytes hdr=$hdr")
         }
+    }
+
+    private companion object {
+        /** Do not spam keyframe requests faster than this while dropping delta frames. */
+        const val KEYFRAME_REQUEST_INTERVAL_MS = 300L
     }
 }

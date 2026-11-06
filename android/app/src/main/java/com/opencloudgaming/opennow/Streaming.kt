@@ -667,6 +667,19 @@ class NativeStreamClient(
                             renderer?.prefersDirectSdr == true
                     },
                     requestTextureOutput = { reason -> renderer?.requestTextureOutput(reason) },
+                    // Entering/leaving VR swaps the decoder Surface. The surface decoder drops
+                    // delta frames until a keyframe arrives, so ask signaling right away instead
+                    // of waiting up to 5 s for the media-stall watchdog. Posted to the main scope
+                    // because StreamSignaling is not thread-safe.
+                    requestKeyFrame = {
+                        scope.launch {
+                            signaling?.requestKeyframe(
+                                reason = "decoder_surface_changed",
+                                backlogFrames = 0,
+                                attempt = 1,
+                            )
+                        }
+                    },
                 ),
             )
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
