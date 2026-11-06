@@ -15,12 +15,15 @@
 2. **现在到哪一步**：框架 + 主界面回退 + VR 黑底/2D 纹理渲染 + 低端机性能优化 + 全套 CI 守卫
    已落盘；**每次改动都必须靠 GitHub Actions 验证，本机没有 Android 编译工具链**。
 3. **最重要的一条经验**：**CI 全绿 ≠ 真机能用**。曾经出现 AAR 缺 `libcardboard_sdk_jni.so`，
-   CI 全绿但用户点「进入 VR」直接闪退。现在 AAR/APK 两层二进制守卫已加，仍要真机复测。
+   CI 全绿但用户点「进入 VR」直接闪退（已修）；更隐蔽的一次是 `VrModeHost` 的 Compose
+   `DisposableEffect` 竞态把刚创建的 VR view 误销毁，真机「进 VR 啥也没有」（§12，已修）。
+   结论：**渲染/生命周期问题只能靠真机 logcat 定案，别靠猜**。
 4. **绝对不能做**：3D/SBS/左右眼不同内容、gaze/眼球/凝视/dwell/头部动作确认、
-   把电视版 UI 放回主界面、把 2.3.8 只改个版本号冒充适配、在本机编译。
-5. **接手后最优先的三件事**：① 查最新 CI run 是否全绿；② **按 8.5 节实现「串流中途切 VR」的
-   `switchToSurface()` 双向切换**（这是当前最实在的功能缺口），并在真机验证关键帧恢复；
-   ③ 请用户在 Android 10 真机复测画面 / 景深 / 软键盘，再按第 4 节补 P3 与处理 P2 阻塞项。
+   把电视版 UI 放回主界面、把 2.3.8 只改个版本号冒充适配、在本机编译、
+   **把 `DisposableEffect` 清理逻辑改回读共享 `viewRef` 的写法**（§12.3）。
+5. **接手后最优先的三件事**：① 查最新 CI run 是否全绿、读 §12 结案记录；
+   ② 请用户按 §12.6 在真机复测 VR 画面 / 景深 / 软键盘 / BACK 无缝退出；
+   ③ 按第 4 节补 P3 与处理 P2 阻塞项。
 
 ---
 
@@ -314,6 +317,11 @@ docs/                                 见第 5 节
 18. **`setZOrderOnTop(true)` 是双刃剑**：它让 GL 层成为不透明置顶层，但必须在 surface 创建前
     设置；从 `init`/`onAttachedToWindow` 遍历子 view 调用不可靠。`3cfcade` 加了它之后真机反而
     显示「原本的非 VR 界面」（VR 层未出现/透明）。已回退，见 §12。
+19. **Compose `DisposableEffect(key)` 的 onDispose 不要读「会被新 composition 覆盖的共享状态」**：
+    `VrModeHost` 曾用 `viewRef`（VrModeHost 作用域）+ `DisposableEffect(enabled)`，false→true
+    切换时旧 effect 的 onDispose 会把 `AndroidView.factory` 刚建好的新 view 误销毁（onResume
+    后 3ms 就 onPause/onDestroy）。修复见 §12.3/12.4 —— 用「仅 enabled 时存在的子 composable」
+    + `DisposableEffect(Unit)` + 局部引用。**这是「进 VR 啥也没有」的真正根因**。
 
 ---
 
@@ -375,6 +383,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42212285185` | `fb64a9a` | 失败：切 surface 后请求关键帧 |
 | `42215232161` | `72e803c` | 失败：`menuKeyClosesThePanelWhenItIsAlreadyOpen` 单测与 combo 键冲突 |
 | **`42219713375`** | **`3cfcade`** | **成功**：修复 combo 冲突 + 手柄长按 D-pad repeat（含 4 新测试）+ `setZOrderOnTop(true)` 层级尝试；两 job 全绿。**但真机实测进入 VR 显示的是「原本的非 VR 手机界面」，VR 层没出现** |
+| **`42230809154`** | **`f77f482`** | **成功**：回退 `setZOrderOnTop` + 四个 VR 文件加节流诊断日志（渲染逻辑不变）。用户装此版抓 logcat，据此定位真正根因（见 §12） |
+| 待运行 | 本次修复 | **修复 `VrModeHost` 的 `DisposableEffect` 竞态**（VR view 刚 onResume 就被误 onPause/onDestroy）——见 §12.4；run ID 待 CI 出来后补 |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
@@ -502,48 +512,76 @@ FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
 
 ---
 
-## 12. 2026-11-06 追加：「进入 VR 显示原本非 VR 界面」诊断与日志方案
+## 12. 2026-11-06 结案：「进 VR 啥也没有」= VrModeHost 的 DisposableEffect 竞态（已修复）
 
-### 12.1 现象与核实到的事实
+### 12.1 现象与已否决的猜测
 
-- 用户测的是 **`3cfcade`**（当前 `main`，CI run `42219713375` 全绿）。进入 VR 后看到的是
-  **「原本的 no-VR 界面」**——不是纯黑、不是「全屏 2D 串流」，而是底层 2D 手机 UI 直接透出，
-  VR 层没有出现。
-- 诊断导出 `opennow-android-logs-20261106-211655.txt`（4 MB）里那条
-  `UnsatisfiedLinkError: couldn't find "libcardboard_sdk_jni.so"` 的调用栈虽经过
-  `VrTheaterView.<init> → VrModeHost.kt:45`，但它是 **`[Retained Java crash — previous process]`
-  timestamp 08:56**，当前测试是 13:00–13:14；且该缺库闪退早在 `11a4d69` 已修复、用户实测确认
-  「能进 VR」。**不是本次根因**。
-- 之前「零 CardboardView 生命周期日志 = renderer 没画帧」是**误判**：`vr/` 目录本来就没有
-  任何 `Log.*` 语句（见 §7.16）。
-- `docs/VR_IMPLEMENTATION_PLAN.md` §12.5 早已写明剩余问题是「**渲染内容为空 / 啥也没有**」。
+- 用户测过 `3cfcade`（带 `setZOrderOnTop`）与 `f77f482`（回退置顶 + 诊断日志），现象一致：
+  进入 VR 后看到**「原本的 no-VR 界面」（底层 2D UI 透出，VR 层没出现）**，或「啥也没有」。
+- 诊断导出 4 MB 日志里那条 `UnsatisfiedLinkError: libcardboard_sdk_jni.so` 是
+  **`[Retained Java crash — previous process]` timestamp 08:56**（当前测试是 13:00–13:14），
+  且该缺库闪退早在 `11a4d69` 已修复、用户实测确认「能进 VR」。**不是本次根因**。
+- 「零 CardboardView 生命周期日志」曾是误判：`vr/` 原本一条 `Log.*` 都没有（§7.16）。
+- shader 编译、GLSL 黑屏、JNI/SDK、`setZOrderOnTop` 层级——**全部经真机 logcat 排除**。
+- `docs/VR_IMPLEMENTATION_PLAN.md` §12.5 早已写明剩余问题是「渲染内容为空 / 啥也没有」。
 
-### 12.2 本次改动（只加日志 + 回退置顶，不改渲染逻辑）
+### 12.2 真机 logcat 的决定性证据（commit `f77f482`，run `42230809154` 全绿）
 
-| 文件 | 改动 |
-| --- | --- |
-| `VrTheaterView.kt` | **移除 `setZOrderOnTop(true)` / `promoteGlSurface()`**（回到 `fb64a9a` 的层级）；保留 `setKeepScreenOn` / overlay 隐藏；所有生命周期加 `Log.d`（TAG `VrTheaterView`） |
-| `VrTheaterRenderer.kt` | shader 链接失败改 `getOrElse` 记录 `Log.e`；`onSurfaceCreated`/`onNewFrame`/`onRendererShutdown` 加一次性日志；`onDrawEye` 加 **useVideo 跳变 + 三种 SKIP 原因 + 每 120 帧一条节流心跳**；**渲染逻辑与 early-return 顺序完全不变** |
-| `VrSession.kt` | `setEnabled()` 加一行日志 |
-| `VrModeHost.kt` | `AndroidView.factory` / `onViewAttachedToWindow` 加日志 |
-| `docs/HANDOFF.md` / `docs/VR_IMPLEMENTATION_PLAN.md` | 记录结论与日志过滤命令 |
+用户执行 `adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer`，
+每次进入 VR 序列完全复现（以 22:26:32 那次为例）：
 
-回退 `setZOrderOnTop` 的依据：它把 Cardboard GL SurfaceView 提成不透明置顶层且要求在 surface
-创建前设置；从 `init`/`onAttachedToWindow` 遍历子 view 调用时机不可靠，疑似让 GL 层透明/失效，
-于是底层 2D UI 透出 = 用户看到的「原本的非 VR 界面」。**这只靠真机最终判定**，CI 无法验证画面。
+```
+setEnabled(true) → AndroidView.factory → init(childCount=2) → onAttachedToWindow
+→ VrTheaterView: start: onResume()        22:26:32.615
+→ VrTheaterView: stop: onPause()          22:26:32.618   ← 仅 3ms 后，期间没有 setEnabled(false)
+→ VrTheaterView: release: onDestroy()     22:26:32.637
+[9 秒后用户退出] setEnabled(false) → onDetachedFromWindow（此时已无 stop/release 日志）
+```
 
-### 12.3 下一步（真机验证，需用户配合）
+- `view.stop()` / `view.release()` 全仓库**仅在 `VrModeHost.DisposableEffect(enabled).onDispose`
+  调用**（grep 复核），所以那次 `onPause()/onDestroy()` 必来自此 effect，而当时 enabled 仍为 true。
+- 整份日志**零条 `VrTheaterRenderer` 日志** → `onSurfaceCreated` / `onDrawEye` 从没执行，
+  GL surface 刚 `onResume()` 就被销毁 → 画面当然「啥也没有」。
+- `childCount=2`、`hiddenNonSurface=1` 证明 CardboardView 构造、JNI、SDK 都正常。
 
-1. 推本次改动 → CI 出新 APK（工件 `opennow-vr-debug-arm64-v8a`）→ 用户覆盖安装。
-2. 进 VR 前后用 `adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer` 抓日志并回传。
-   判定链：
-   - **没有 `VrSession: setEnabled(true)`** → 开关/按键没通。
-   - **有 setEnabled 但无 `VrModeHost: AndroidView.factory`** → Compose 分支没渲染 VR host。
-   - **有 factory 但无 `VrTheaterRenderer: onSurfaceCreated`** → Cardboard GL surface 没起来（回到 JNI/SDK 层）。
-   - **有 onSurfaceCreated 但 shader `link FAILED`** → shader 编译问题。
-   - **有 onSurfaceCreated、有 draw 心跳，但 `SKIP — ...`** → 定位到具体「啥也没画」原因。
-   - **一切都正常但用户仍看不到** → 纯层级/compositing 问题，再评估 `setZOrderMediaOverlay` 或
-     Compose `zIndex`，而不是 `setZOrderOnTop`。
-3. 依据日志结果决定最终层级修复；**在拿到日志前不要再猜、不要再改渲染**。
+### 12.3 根因（Compose 竞态）
 
-> 本次只改诊断与回退，不含 shader/层级的新修复。所有判断以真机日志为准。
+旧 `VrModeHost` 在**自身作用域**持有 `var viewRef by remember { mutableStateOf(...) }`，并在
+`DisposableEffect(enabled).onDispose` 里 `viewRef?.stop()/release()`。
+当 `enabled: false→true`：Compose 会 dispose 掉 key=false 的**旧** effect；但该 `onDispose` 在
+commit 阶段执行时，`AndroidView.factory` 已经把**新建的** VrTheaterView 写进了同一个 `viewRef`。
+于是旧 effect 的 onDispose 把**刚创建的新 view** 给 pause + destroy 了 —— 这就是 3ms 竞态，
+也解释了之前「有时黑屏、有时非 VR 界面」的不稳定症状。
+
+### 12.4 修复（commit 见 §8.4 最新行）
+
+把 VR 视图封装进**仅在 `enabled==true` 时存在**的私有子 composable `VrTheaterHost`：
+
+- 用 `remember { VrTheaterHolder() }` 保存**局部** view 引用（不再是 VrModeHost 的共享状态）；
+- 用 `DisposableEffect(Unit)`（key 与 enabled 无关）管理该子 composable 的生命周期；
+- `enabled=false` 时子 composable 离开组合 → 它的 onDispose 只清理**属于它自己的那个 view**，
+  不存在「旧 effect 读到新 view」的交错窗口。
+
+`VrModeHost()` 在 `MainActivity.setContent` 根 Box 里无条件调用（已核实），不会被整体移除，
+所以这是唯一的生命周期来源。回退的 `setZOrderOnTop` 保持不恢复：日志证明「原本非 VR 界面」
+是 view 被误销毁后底层 UI 透出，**不是**独立的 SurfaceView 层级问题；若真机修复后再出现
+「VR 显示成全屏 2D 串流」，再评估 `setZOrderMediaOverlay` / Compose `zIndex`。
+
+### 12.5 诊断日志（保留，便于回归）
+
+`VrSession` / `VrModeHost` / `VrTheaterView` / `VrTheaterRenderer` 四个 TAG。渲染热路径仅
+每 120 帧一条节流心跳，正常帧零分配（§9）。抓取命令：
+
+```
+adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer
+```
+
+修复后的**健康序列**应为：`start: onResume()` 之后**不再**有 `stop/release`，随后
+`VrTheaterRenderer: onSurfaceCreated` → 「onDrawEye: draw frame#」心跳；退出时才有
+`VrTheaterHost.onDispose` + `stop/release`。
+
+### 12.6 待用户真机确认（CI 无法验证画面）
+
+1. 覆盖安装新 APK，进 VR 应能看到黑色房间 + 2D 状态面板/串流画面（不再是原手机 UI）。
+2. BACK 退出 VR 应无重连、软键盘恢复。
+3. 若仍有问题，按 §12.5 抓 logcat 回传。
