@@ -360,7 +360,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42194578267` | `4c67196` | 成功：docs-only push 回归验证，两个 job 全绿 |
 | **`42198812193`** | **`1a489e9`** | **成功：主代码验证**。电视版 UI 移除 + 黑底/OES 渲染 + 低端机优化 + 64 测试；两个 job 全绿，AAR/APK 两道 JNI 守卫均 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 21304 B、`opennow-vr-debug-arm64-v8a` 47525871 B |
 | `42200369358` | `bd0f6b4` | 成功：docs + KDoc 注释改动的回归；两个 job 全绿 |
-| **`42202834080`** | **`e365e03`** | **成功：最终代码验证（本次交接的版本）**。手机 2D 端 VR 设置面板 + 7 个新增测试；两个 job 全绿、无失败步骤；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 23811 B、`opennow-vr-debug-arm64-v8a` 47548120 B |
+| **`42202834080`** | **`e365e03`** | **成功：手机端 VR 设置面板版**。手机 2D 端 VR 设置面板 + 7 个新增测试；两个 job 全绿、无失败步骤；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 23811 B、`opennow-vr-debug-arm64-v8a` 47548120 B |
+| `42206935569` | `203e57a` | **失败（已定位并修复）**：重写 `VrModeHost.kt` 时漏了 `import androidx.compose.runtime.setValue`，`:app:compileDebugKotlin` 报 `'MutableState<VrTheaterView?>' has no method 'setValue'`。**教训**：删掉 `by remember { mutableStateOf(...) }` 之外的 UI 时，别忘了它仍需要 `getValue` + `setValue` 两个 import |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
