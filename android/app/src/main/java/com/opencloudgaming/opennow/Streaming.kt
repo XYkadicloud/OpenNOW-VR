@@ -659,7 +659,13 @@ class NativeStreamClient(
                     requestedFps = { settings.fps },
                     hdrEnabled = { settings.hdrEnabled },
                     decoderSurface = { VrVideoSurfaceRegistry.target() ?: renderer?.decoderTarget },
-                    directSdrEnabled = { VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true },
+                    // VR needs a Surface; recording/sharpening need texture frames. Never force
+                    // the surface path when the session explicitly required textures, or those
+                    // features silently lose every frame.
+                    directSdrEnabled = {
+                        (VrVideoSurfaceRegistry.isActive && renderer?.textureOutputRequired != true) ||
+                            renderer?.prefersDirectSdr == true
+                    },
                     requestTextureOutput = { reason -> renderer?.requestTextureOutput(reason) },
                 ),
             )
@@ -2618,7 +2624,10 @@ class NativeStreamClient(
                         nativeLowLatencyDecoderEnabled = SettingsStore(appContext).settings.value.nativeLowLatencyDecoder,
                         requestedFps = { settings.fps }, hdrEnabled = { settings.hdrEnabled },
                         decoderSurface = { VrVideoSurfaceRegistry.target() ?: renderer?.decoderTarget },
-                        directSdrEnabled = { VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true },
+                        directSdrEnabled = {
+                            (VrVideoSurfaceRegistry.isActive && renderer?.textureOutputRequired != true) ||
+                                renderer?.prefersDirectSdr == true
+                        },
                         requestTextureOutput = { reason -> renderer?.requestTextureOutput(reason) }, directJavaDecode = true),
                     sink = { renderer },
                     recordingAudio = { pcm ->

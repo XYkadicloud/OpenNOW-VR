@@ -100,6 +100,9 @@ class VrGamepadRouter {
         VrKeys.DPAD_RIGHT -> VrCommand.Adjust(fastMultiplier())
         VrKeys.BUTTON_A, VrKeys.DPAD_CENTER -> VrCommand.Confirm
         VrKeys.BUTTON_B -> VrCommand.CloseMenu
+        // SELECT/START opens the menu; pressing it again must close it, otherwise a user without
+        // a B button would be trapped in the panel.
+        in VrKeys.MENU_KEYS -> VrCommand.CloseMenu
         else -> VrCommand.Consumed
     }
 

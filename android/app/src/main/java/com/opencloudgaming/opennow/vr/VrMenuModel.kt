@@ -43,7 +43,7 @@ object VrMenuModel {
             VrRanges.CURVATURE_MIN, VrRanges.CURVATURE_MAX, VrRanges.CURVATURE_STEP),
         VrMenuItem(VrMenuItemId.VERTICAL_OFFSET, "画面高低 (m)", VrMenuItemKind.RANGE,
             VrRanges.VERTICAL_OFFSET_MIN, VrRanges.VERTICAL_OFFSET_MAX, VrRanges.VERTICAL_OFFSET_STEP),
-        VrMenuItem(VrMenuItemId.VIEWER_MODE, "视角模式 (纸盒/裸眼)", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.VIEWER_MODE, "视角模式", VrMenuItemKind.ENUM),
         VrMenuItem(VrMenuItemId.HEAD_TRACKING, "头部追踪", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.HEAD_SENSITIVITY, "追踪灵敏度", VrMenuItemKind.RANGE,
             VrRanges.HEAD_SENSITIVITY_MIN, VrRanges.HEAD_SENSITIVITY_MAX, VrRanges.HEAD_SENSITIVITY_STEP),

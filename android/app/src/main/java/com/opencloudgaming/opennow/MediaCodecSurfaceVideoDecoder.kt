@@ -120,7 +120,12 @@ internal class MediaCodecSurfaceVideoDecoder(
         if (failureReason != null || target !== outputSurface || nextWidth != width || nextHeight != height || frame.rotation != rotation) {
             stopCodecLocked()
         }
-        if (needsKeyFrame && frame.frameType != EncodedImage.FrameType.VideoFrameKey) return@synchronized VideoCodecStatus.ERROR
+        // A freshly configured (or re-configured) surface decoder cannot decode delta frames.
+        // Report NO_OUTPUT rather than ERROR so WebRTC/NVST requests a keyframe instead of
+        // classifying the whole media session as broken. The frame is simply dropped.
+        if (needsKeyFrame && frame.frameType != EncodedImage.FrameType.VideoFrameKey) {
+            return@synchronized VideoCodecStatus.NO_OUTPUT
+        }
         try {
             if (codec == null) {
                 val selected = configuration(nextWidth, nextHeight, fps)

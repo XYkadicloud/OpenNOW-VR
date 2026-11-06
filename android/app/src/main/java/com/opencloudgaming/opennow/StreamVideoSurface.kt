@@ -5,6 +5,7 @@ import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.FrameLayout
+import com.opencloudgaming.opennow.vr.VrVideoSurfaceRegistry
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -36,6 +37,8 @@ class StreamVideoSurface(context: Context, private val hdr: Boolean, preferDirec
     @Volatile private var textureRequired = !preferDirectSdr
     @Volatile private var released = false
     internal val prefersDirectSdr: Boolean get() = !hdr && direct != null && !textureRequired && !released
+    /** True once recording/sharpening forced EGL texture frames for this session. */
+    internal val textureOutputRequired: Boolean get() = textureRequired
     private val surfaceView: SurfaceView get() = if (hdr || prefersDirectSdr) direct!! else sdr!!
     val holder: SurfaceHolder get() = surfaceView.holder
     @Volatile internal var decoderTarget: DecoderSurfaceTarget? = null
@@ -128,7 +131,9 @@ class StreamVideoSurface(context: Context, private val hdr: Boolean, preferDirec
         if (released) return
         val opaque = frame.buffer as? MediaCodecSurfaceBuffer
         if (opaque != null) {
-            if ((!hdr && !prefersDirectSdr) || !opaque.present()) return
+            // VR owns the decoder surface even when the 2D view uses EGL textures, so the opaque
+            // buffer must still be presented; otherwise every VR frame is released undisplayed.
+            if ((!hdr && !prefersDirectSdr && !VrVideoSurfaceRegistry.isActive) || !opaque.present()) return
             if (publishSize(frame.rotatedWidth, frame.rotatedHeight)) {
                 events?.onFrameResolutionChanged(frame.rotatedWidth, frame.rotatedHeight, 0)
             }

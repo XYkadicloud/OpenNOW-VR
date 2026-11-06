@@ -468,9 +468,17 @@ internal class OpenNowVideoDecoderFactory(
         } else {
             decoder
         }
-        if (!directSdrEnabled()) return textureDecoder
+        // Always keep a surface decoder available behind the texture decoder. The previous
+        // `if (!directSdrEnabled()) return textureDecoder` froze the decoder choice when the
+        // session was created, so entering VR *after* the stream had started left the VR
+        // SurfaceTexture with no producer (VR showed only the status panel).
+        // SurfaceOrTextureVideoDecoder now switches texture -> surface at runtime, and
+        // initDecode() still selects the texture decoder while VR is off, so the ordinary 2D
+        // path is unchanged. HDR returns above and keeps its dedicated surface decoder.
         if (codec == null || hardwareDecoder == null || textureDecoder == null || hardwareDecoderImplementation == null) {
-            requestTextureOutput("no approved hardware surface decoder")
+            // Only report the fallback when a surface was actually requested; otherwise the
+            // diagnostic would permanently disable direct SDR for an ordinary 2D session.
+            if (directSdrEnabled()) requestTextureOutput("no approved hardware surface decoder")
             return textureDecoder
         }
         val surfaceDecoder = MediaCodecSurfaceVideoDecoder(exactRequestedFps, decoderSurface,

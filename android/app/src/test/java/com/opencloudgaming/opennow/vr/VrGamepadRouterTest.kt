@@ -61,6 +61,14 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_B))
     }
 
+    /** SELECT/START must be a real toggle so a pad without a usable B button is not trapped. */
+    @Test
+    fun menuKeyClosesThePanelWhenItIsAlreadyOpen() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_SELECT))
+        assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_START))
+    }
+
     @Test
     fun openMenuRoutesDpadAndFaceButtonsOnlyToThePanel() {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }

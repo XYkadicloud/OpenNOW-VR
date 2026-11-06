@@ -4,14 +4,12 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.view.Surface
 import com.google.cardboard.sdk.CardboardView
 import com.google.cardboard.sdk.HeadTransform
@@ -30,8 +28,11 @@ import javax.microedition.khronos.egl.EGLConfig
  *  - Exactly ONE flat 2D quad in front of the viewer. No 3D scene, no geometry, no skybox.
  *  - With a stream: the decoder SurfaceTexture (GL_TEXTURE_EXTERNAL_OES) is the quad's texture.
  *    Zero-copy: the video never passes through a Bitmap or a second render target.
- *  - Without a stream: a small 2D Canvas panel (GL_TEXTURE_2D) shows status, current settings and
- *    gamepad hints, so entering VR is never a blank screen.
+ *  - Without a stream: a 2D Canvas panel (GL_TEXTURE_2D) shows status and gamepad hints, so
+ *    entering VR is never a blank screen.
+ *  - When the gamepad opens the settings menu (SELECT/START), the SAME quad shows a Canvas-drawn
+ *    two-column menu driven exclusively by VrGamepadRouter commands. It is not a persistent
+ *    overlay: it appears only while the user holds it open and disappears on B / SELECT.
  *  - Both eyes sample the SAME quad and the SAME texture. This is a virtual cinema screen, NOT
  *    stereoscopic 3D video. No SBS, no parallax, no per-eye content.
  *
@@ -42,16 +43,21 @@ import javax.microedition.khronos.egl.EGLConfig
  *  produced by glClearColor() in onSurfaceCreated() plus the SDK's own clear. Do NOT add a clear
  *  to onDrawEye().
  *
- * LOW-END PERFORMANCE BUDGET (see docs/HANDOFF.md section 9 and the plan's section 12.5)
+ * LOW-END PERFORMANCE BUDGET (OPPO F9 / Helio P60 / Mali-G72 MP3; see HANDOFF.md section 9)
  *  - Zero heap allocation per frame: reused matrices (multiplyInto / scaledRotationInto), reused
- *    direct FloatBuffers, reused Bitmap/Canvas/Paints, no string formatting or logging in onDrawEye.
- *    The Cardboard SDK's Eye matrices are already preallocated and returned by reference.
+ *    direct FloatBuffers, reused Bitmap/Canvas/Paints, no string formatting or logging in
+ *    onDrawEye(). The Cardboard SDK's Eye matrices are already preallocated and returned by
+ *    reference.
  *  - Flat screen => 4 vertices instead of 50 (24-segment strip only when curvature > 0).
- *  - Panel is redrawn at most once per PANEL_THROTTLE_MS and only when settings actually changed.
+ *  - Only ONE textured quad is drawn per eye, including while the menu is open.
+ *  - Panel is redrawn only when its content actually changed (menu navigation / settings) and
+ *    uploaded with texSubImage2D, so no texture is reallocated.
  *  - No blending, no depth test, no MSAA, no mipmaps, GL_DITHER disabled, LINEAR filtering only.
  *  - Brightness is a single multiply in the fragment shader, not an extra render pass.
  *  - The external-OES program is optional: if a driver cannot compile it, initialisation falls
  *    back to the 2D panel instead of crashing the GL thread.
+ *  - The frame-available callback only flips an AtomicBoolean; it is not posted to the main
+ *    thread, so 60 fps decoding does not enqueue 60 main-loop messages per second.
  *
  * All in-VR control remains physical gamepad input. No gaze / eye / dwell / reticle logic exists.
  */
@@ -78,18 +84,25 @@ class VrTheaterRenderer : CardboardView.Renderer {
 
     @Volatile private var hasVideoFrame = false
     @Volatile private var panelDirty = true
-    private var lastPanelUploadMs = 0L
+    private var forcePanelUpload = true
 
     private var panelBitmap: Bitmap? = null
     private var panelCanvas: Canvas? = null
     private var borderPaint: Paint? = null
+    private var panelBackgroundPaint: Paint? = null
     private var titlePaint: Paint? = null
     private var bodyPaint: Paint? = null
+    private var valuePaint: Paint? = null
     private var hintPaint: Paint? = null
+    private var selectedPaint: Paint? = null
+    private var selectedRect: RectF? = null
 
     @Volatile private var settings: VrSettings = VrSession.settings.value
     @Volatile private var vertexCount = 0
+    @Volatile private var meshDirty = true
     private var lastAspect: Float = VrSession.videoAspect
+    private var lastMenuOpen = false
+    private var lastSelectedIndex = -1
 
     // Preallocated render-loop state. Nothing below is allocated inside onDrawEye().
     private val headQuaternion = FloatArray(4).also { it[3] = 1f }
@@ -110,7 +123,9 @@ class VrTheaterRenderer : CardboardView.Renderer {
             next.curvature != settings.curvature
         val panelChanged = next != settings
         settings = next
-        if (geometryChanged) rebuildMesh()
+        // Geometry buffers are only touched on the GL thread (see onDrawEye); applySettings runs
+        // on the main thread, so it just raises a flag instead of rebuilding in place.
+        if (geometryChanged) meshDirty = true
         if (panelChanged) panelDirty = true
     }
 
@@ -129,8 +144,9 @@ class VrTheaterRenderer : CardboardView.Renderer {
         panelTextureId = createPanelResources()
         setupVideoTexture()
         rebuildMesh()
+        meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
-        uploadPanel(SystemClock.uptimeMillis())
+        uploadPanel()
     }
 
     override fun onNewFrame(headTransform: HeadTransform) {
@@ -154,15 +170,39 @@ class VrTheaterRenderer : CardboardView.Renderer {
     override fun onDrawEye(eye: CardboardView.Eye) {
         // Deliberately NO glClear here - see the class KDoc.
         val current = settings
-        val aspect = VrSession.videoAspect
-        if (aspect != lastAspect) {
-            lastAspect = aspect
-            rebuildMesh()
+        val menuOpen = VrSession.menuOpen.value
+        val selectedIndex = VrSession.selectedIndex.value
+        if (menuOpen != lastMenuOpen) {
+            lastMenuOpen = menuOpen
+            lastSelectedIndex = selectedIndex
+            meshDirty = true
+            forcePanelUpload = true
+            panelDirty = true
+        } else if (menuOpen && selectedIndex != lastSelectedIndex) {
+            lastSelectedIndex = selectedIndex
+            forcePanelUpload = true
+            panelDirty = true
         }
 
-        val useVideo = hasVideoFrame && video != null && videoTextureId != 0
-        if (!useVideo && panelDirty) maybeUploadPanel()
+        val aspect = VrSession.videoAspect
+        if (!menuOpen && aspect != lastAspect) {
+            lastAspect = aspect
+            meshDirty = true
+        }
+        if (meshDirty) {
+            rebuildMesh()
+            meshDirty = false
+        }
 
+        // While the menu is open it owns the quad; decoding keeps running underneath so closing
+        // the menu returns to a live picture with no reconnection.
+        val useVideo = !menuOpen && hasVideoFrame && video != null && videoTextureId != 0
+        if (!useVideo && (panelDirty || forcePanelUpload)) {
+            uploadPanel()
+            forcePanelUpload = false
+        }
+
+        if (!useVideo && !menuOpen && !current.showStatus) return
         val handles = (if (useVideo) video else panel) ?: return
         if (vertexCount == 0) return
 
@@ -221,12 +261,20 @@ class VrTheaterRenderer : CardboardView.Renderer {
         panelBitmap = null
         panelCanvas = null
         borderPaint = null
+        panelBackgroundPaint = null
         titlePaint = null
         bodyPaint = null
+        valuePaint = null
         hintPaint = null
+        selectedPaint = null
+        selectedRect = null
         vertexCount = 0
         hasVideoFrame = false
         panelDirty = true
+        forcePanelUpload = true
+        meshDirty = true
+        lastMenuOpen = false
+        lastSelectedIndex = -1
     }
 
     private fun createHandles(fragmentSource: String): ProgramHandles {
@@ -255,6 +303,7 @@ class VrTheaterRenderer : CardboardView.Renderer {
         val bitmap = Bitmap.createBitmap(PANEL_W, PANEL_H, Bitmap.Config.ARGB_8888)
         panelBitmap = bitmap
         panelCanvas = Canvas(bitmap)
+        panelBackgroundPaint = Paint().apply { color = Color.rgb(8, 10, 14) }
         borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 2f
@@ -269,10 +318,19 @@ class VrTheaterRenderer : CardboardView.Renderer {
             color = Color.rgb(205, 218, 232)
             textSize = 19f
         }
+        valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 17f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
         hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(120, 165, 195)
-            textSize = 16f
+            textSize = 15f
         }
+        selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0, 92, 138)
+        }
+        selectedRect = RectF()
         // Allocate texture storage once. Later refreshes use texSubImage2D (no reallocation).
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
         return ids[0]
@@ -295,10 +353,9 @@ class VrTheaterRenderer : CardboardView.Renderer {
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
 
         val texture = SurfaceTexture(videoTextureId)
-        texture.setOnFrameAvailableListener(
-            { VrVideoSurfaceRegistry.markFrameAvailable() },
-            Handler(Looper.getMainLooper()),
-        )
+        // Only flips an AtomicBoolean. Do NOT post to the main looper: that would enqueue one
+        // message per decoded frame on the UI thread of a low-end device.
+        texture.setOnFrameAvailableListener { VrVideoSurfaceRegistry.markFrameAvailable() }
         val output = Surface(texture)
         videoSurfaceTexture = texture
         videoSurface = output
@@ -317,45 +374,77 @@ class VrTheaterRenderer : CardboardView.Renderer {
         hasVideoFrame = false
     }
 
-    private fun maybeUploadPanel() {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastPanelUploadMs < PANEL_THROTTLE_MS) return
-        uploadPanel(now)
-    }
-
-    private fun uploadPanel(now: Long) {
+    private fun uploadPanel() {
         val canvas = panelCanvas ?: return
         val bitmap = panelBitmap ?: return
+        if (VrSession.menuOpen.value) drawMenu(canvas, settings) else drawStatus(canvas, settings)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTextureId)
+        GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap)
+        panelDirty = false
+    }
+
+    private fun drawStatus(canvas: Canvas, s: VrSettings) {
         val border = borderPaint ?: return
         val title = titlePaint ?: return
         val body = bodyPaint ?: return
         val hint = hintPaint ?: return
-        val s = settings
-        canvas.drawColor(Color.rgb(8, 10, 14))
+        canvas.drawPaint(panelBackgroundPaint ?: return)
         canvas.drawRect(2f, 2f, PANEL_W - 2f, PANEL_H - 2f, border)
-        canvas.drawText("OpenNOW VR", 24f, 52f, title)
-        canvas.drawText("2D 平面影院 · 黑色背景", 24f, 92f, body)
-        canvas.drawText("串流开始后，画面会显示在这块平面幕布上", 24f, 124f, body)
+        canvas.drawText("OpenNOW VR", 28f, 56f, title)
+        canvas.drawText("2D 平面影院 · 纯黑背景", 28f, 96f, body)
+        canvas.drawText("串流开始后，画面会显示在这块平面幕布上", 28f, 132f, body)
         canvas.drawText(
             String.format(
                 Locale.US,
                 "窗口 %.1fx    距离 %.1f m    亮度 %.2f",
                 s.screenScale, s.screenDistanceMeters, s.brightness,
             ),
-            24f, 160f, body,
+            28f, 236f, body,
         )
         canvas.drawText(
-            String.format(Locale.US, "曲面 %.1f   偏移 %.1f   模式 %s", s.curvature, s.screenVerticalOffset,
-                if (s.viewerMode == VrViewerMode.CARDBOARD) "Cardboard" else "单目省电"),
-            24f, 192f, body,
+            String.format(Locale.US, "曲面 %.1f    偏移 %.1f    模式 %s", s.curvature, s.screenVerticalOffset,
+                if (s.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"),
+            28f, 274f, body,
         )
-        canvas.drawText("手柄：方向键调整 · A 设置 · B 返回", 24f, 240f, hint)
-        canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 24f, 264f, hint)
+        canvas.drawText("手柄 SELECT / START：打开设置", 28f, 344f, hint)
+        canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
+        canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
+    }
 
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTextureId)
-        GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap)
-        lastPanelUploadMs = now
-        panelDirty = false
+    private fun drawMenu(canvas: Canvas, s: VrSettings) {
+        val border = borderPaint ?: return
+        val title = titlePaint ?: return
+        val label = bodyPaint ?: return
+        val value = valuePaint ?: return
+        val hint = hintPaint ?: return
+        val highlight = selectedPaint ?: return
+        val rect = selectedRect ?: return
+        canvas.drawPaint(panelBackgroundPaint ?: return)
+        canvas.drawRect(2f, 2f, PANEL_W - 2f, PANEL_H - 2f, border)
+        canvas.drawText("VR 设置", 26f, 50f, title)
+        canvas.drawText("B 关闭", PANEL_W - 26f - hint.measureText("B 关闭"), 48f, hint)
+
+        val selected = VrSession.selectedIndex.value
+        VrMenuModel.items.forEachIndexed { index, item ->
+            val column = if (index < MENU_ROWS_PER_COLUMN) 0 else 1
+            val row = index % MENU_ROWS_PER_COLUMN
+            val left = if (column == 0) 24f else 396f
+            val baseline = 102f + row * MENU_ROW_HEIGHT
+            if (index == selected) {
+                rect.set(left - 4f, baseline - 28f, left + 336f, baseline + 9f)
+                canvas.drawRoundRect(rect, 6f, 6f, highlight)
+            }
+            val textColor = if (index == selected) Color.WHITE else Color.rgb(205, 218, 232)
+            label.color = textColor
+            value.color = textColor
+            val marker = if (index == selected) "▶ " else "   "
+            canvas.drawText(marker + item.label, left + 4f, baseline, label)
+            val display = VrMenuModel.display(s, item.id)
+            canvas.drawText(display, left + 332f - value.measureText(display), baseline, value)
+        }
+        label.color = Color.rgb(205, 218, 232)
+        value.color = Color.WHITE
+        canvas.drawText("↑↓ 选择    ←→ 调整（按住 L1/R1 ×5）    A 确认", 26f, 408f, hint)
     }
 
     private fun rebuildMesh() {
@@ -363,7 +452,9 @@ class VrTheaterRenderer : CardboardView.Renderer {
         // A perfectly flat plane needs 4 vertices. The 24-segment strip is only meaningful when
         // the user enables curvature, so low-end GPUs draw 4 vertices instead of 50 by default.
         val segments = if (s.curvature <= 0.001f) 1 else VrScreenGeometry.DEFAULT_SEGMENTS
-        val mesh = VrScreenGeometry.build(s, VrSession.videoAspect, segments)
+        // The menu is a fixed 16:9 board; the stream quad follows the real decoded aspect.
+        val aspect = if (VrSession.menuOpen.value) MENU_ASPECT else VrSession.videoAspect
+        val mesh = VrScreenGeometry.build(s, aspect, segments)
         positionBuffer.clear()
         positionBuffer.put(mesh.positions)
         positionBuffer.position(0)
@@ -374,9 +465,11 @@ class VrTheaterRenderer : CardboardView.Renderer {
     }
 
     private companion object {
-        const val PANEL_W = 512
-        const val PANEL_H = 288
-        const val PANEL_THROTTLE_MS = 200L
+        const val PANEL_W = 768
+        const val PANEL_H = 432
+        const val MENU_ASPECT = 16f / 9f
+        const val MENU_ROWS_PER_COLUMN = 7
+        const val MENU_ROW_HEIGHT = 44f
 
         /**
          * VrScreenGeometry emits top v=0 / bottom v=1. GLUtils uploads the bitmap's first row at
