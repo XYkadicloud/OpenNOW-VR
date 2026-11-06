@@ -23,7 +23,7 @@
 | 首要可调项 | **串流窗口大小（放大画面）**；另有距离、亮度、曲率、垂直位置、立体/单屏、头部追踪、手柄死区等 |
 | 本机环境 | Windows，只有 JDK 8，**没有 Android SDK / Gradle / gh CLI**。所有编译与验证必须走 GitHub Actions |
 | 目标设备 | **Android 10 / API 29 低端机**，只出 `arm64-v8a`；性能优化为硬要求，见 `HANDOFF.md` 第 9 节 |
-| 当前状态 | 主工程接线 / CI / 纯逻辑层已完成；**P1 视频纹理接入已实现**（OES SurfaceTexture → 平面幕布）、黑底渲染、电视版 UI 移除、渲染循环零堆分配已落盘（**真机未验证**）；**P3 手柄驱动的可见设置面板仍是 TODO**；JVM 测试 6 文件 / **64** 个 `@Test` |
+| 当前状态 | 主工程接线 / CI / 纯逻辑层已完成；**P1 视频纹理接入已实现**（OES SurfaceTexture → 平面幕布）、黑底渲染、电视版 UI 移除、渲染循环零堆分配、**手机 2D 端 VR 设置面板**均已落盘（**真机未验证**）；**VR 内部手柄驱动的可见设置面板（P3）仍是 TODO**；JVM 测试 7 文件 / **71** 个 `@Test` |
 | 验收命令 | GitHub Actions `vr-build` 全绿；产出 `app-arm64-v8a-debug.apk` 工件 |
 
 **一句话**：不要重新设计架构，不要换 SDK，不要加 Activity，不要引入凝视控制，不要把电视版 UI 放回主界面。接手后先查最新 CI run 并取回 Android 10 真机复测结论（`HANDOFF.md` 3.3 / 4 节），再补 P3。
@@ -579,6 +579,7 @@ job 2: app (needs: cardboard-aar)
 | `42192555168` | `11a4d69` | **成功** | 闪退修复版。`Verify the Cardboard JNI bridge is in the AAR` 与 `... in the APK` 两个守卫均 `success`；AAR 385622 B、APK 47565082 B。人工解包 APK 确认 `lib/arm64-v8a/libcardboard_sdk_jni.so`（21800 B）存在且含 `Java_com_google_cardboard_sdk_Initialize_nativeInitialize` 等 JNI 符号 |
 | `42194578267` | `4c67196` | **成功** | docs-only push 触发的回归验证；`build-cardboard-sdk-aar` 与 `vr-unit-tests-and-debug-apk` 两 job 全绿，确认事故复盘文档提交未破坏构建链 |
 | `42198812193` | `1a489e9` | **成功** | 电视版 UI 移除 + 黑底/OES 2D 渲染 + 低端机零分配优化 + 新增 6 个测试。两 job 全绿；AAR/APK 两道 JNI 守卫 success；解包测试报告得 `6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认 `libcardboard_sdk_jni.so`(21800 B) 与 `libGfxPluginCardboard.so`(857144 B)；artifacts 385622 / 21304 / 47525871 B |
+| `42200369358` | `bd0f6b4` | **成功** | docs + KDoc 注释改动的回归；两个 job 全绿 |
 
 > **真机实测（2026-11-06，用户反馈，优先级高于任何 CI 结论）**：run `42192555168` 之后的 APK
 > 点击「进入 VR」**不再闪退**，用户原话「其实能进入 VR 模式啊。当然那由于完全没有任何场景，
@@ -758,6 +759,33 @@ UI 全部换成原版的，只有 VR 模式可以参考那个我修改的那个 
 完整评估见 `HANDOFF.md` 2.2：需 `VirtualDisplay` + `Presentation`，但 ViewModel 状态不同步、
 输入路由要重接、每帧多一次全 UI 合成，与低端机省性能冲突。本 fork 采用的正确解法是
 「解码 Surface 零拷贝直连平面 + 轻量 2D 面板」，不要未做 PoC 就照字面硬改。
+
+### 12.7 手机 2D 端 VR 设置面板（2026-11-06 用户追加，已实现，真机未验证）
+
+用户原话：「麻烦你添加一下设置平面手机这边直接就能控制 VR 这边的具体设置什么的，然后呢还有就是确保一下能够使用」。
+
+**实现原则**：不新造一套状态、不侵入上游庞大的 `OpenNowSettingsScreens.kt`，
+复用既有的 `VrSession.updateSettings()` 单一写入口。
+
+- `vr/VrSettingSpec.kt`：纯 Kotlin 规格表，8 个数值控件
+  （id / 中文标签 / min / max / step / unit / read / write），范围全部取自 `VrRanges`；
+  提供 `quantize()` 步进量化、`sliderSteps`（Material3 `Slider` 的 steps **不含两端**）、`format()`。
+- `vr/VrPhoneSettings.kt`：Compose `AlertDialog`，遍历规格表生成滑块，另有 3 个 `Switch`
+  （单目省电 / 头部追踪 / 显示状态）与「恢复默认」。
+- `vr/VrModeHost.kt`：右下角新增「VR 设置」按钮。Dialog 是独立窗口，
+  **VR 开启时也覆盖在全屏 `CardboardView` 之上**，因此手机端随时可调。
+- 所有改动走 `VrSession.updateSettings()` = `sanitized()` + `SharedPreferences` 持久化 + 手柄路由同步；
+  `VrSession.settings` 这个 `StateFlow` 同时被 VR 渲染器观察，改完立即生效，不需要重进 VR 或重启 App。
+- `VrSettingSpecTest.kt`：7 个 JVM 测试验证 id 唯一、范围/步进合法、`quantize` 网格与越界 clamp、
+  read/write 经 `sanitized()` 往返一致、格式化非空、`menuRepeatMs` 的 Long/Float 转换。
+  测试总数 58 → 64 → **71**（7 个测试文件）。
+
+**边界（防混淆）**：这是**手机平面端**设置，不是 VR 内部面板。戴头显时仍只能用手柄通过
+`VrMenuModel` 调整；把菜单画成 VR 内可见面板（P3）仍未实现，见 12.5。
+两者共用同一个 `VrSession.updateSettings()`，不会状态分叉。
+
+**待真机验证**：不进 VR 点「VR 设置」→ 拖「串流窗口大小」→ 再进 VR 幕布是否确实变大；
+杀掉 App 重开后设置是否保留；VR 开启时对话框能否正常覆盖显示。
 
 ---
 

@@ -3,7 +3,9 @@ package com.opencloudgaming.opennow.vr
 import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,17 +28,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 /**
  * Compose host placed AFTER OpenNowApp() in MainActivity's root Box.
  *
- * When VR is off this is an empty pass-through Box plus a tiny entry button, so the original app
- * keeps all of its behaviour and touch handling. When VR is on, a CardboardView covers the screen.
+ * When VR is off this is a pass-through Box plus two small buttons (VR settings and enter VR),
+ * so the original app keeps all of its behaviour and touch handling. When VR is on, a
+ * CardboardView covers the screen; the buttons stay above it and the settings dialog is a separate
+ * window, so the PHONE-SIDE settings remain reachable even while VR is rendering.
  *
- * The small button is ONLY an enter/exit affordance (and a safety exit when no gamepad is
- * connected). All in-VR control is physical gamepad input — no gaze/eye interaction exists.
+ * The entry/exit button is ONLY an affordance (and a safety exit when no gamepad is connected).
+ * All in-VR control is physical gamepad input — no gaze/eye interaction exists.
  */
 @Composable
 fun VrModeHost() {
     val enabled by VrSession.enabled.collectAsStateWithLifecycle()
     val settings by VrSession.settings.collectAsStateWithLifecycle()
     var viewRef by remember { mutableStateOf<VrTheaterView?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (enabled) {
@@ -60,21 +65,22 @@ fun VrModeHost() {
             )
         }
 
-        Box(
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(10.dp)
-                .alpha(0.62f)
-                .background(Color(0x99000000), RoundedCornerShape(6.dp))
-                .clickable { VrSession.toggle() }
-                .padding(horizontal = 12.dp, vertical = 7.dp),
+                .padding(10.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                text = if (enabled) "退出 VR" else "进入 VR",
-                color = Color.White,
-                fontSize = 12.sp,
-            )
+            VrHostButton(text = "VR 设置") { showSettings = true }
+            VrHostButton(text = if (enabled) "退出 VR" else "进入 VR") { VrSession.toggle() }
         }
+    }
+
+    // A Compose dialog lives in its own window, so the phone-side controls stay usable even when
+    // the full-screen CardboardView is rendering.
+    if (showSettings) {
+        VrPhoneSettingsDialog(onDismiss = { showSettings = false })
     }
 
     DisposableEffect(enabled) {
@@ -88,5 +94,18 @@ fun VrModeHost() {
             VrSession.setMenuOpen(false)
             VrVideoSurfaceRegistry.clear()
         }
+    }
+}
+
+@Composable
+private fun VrHostButton(text: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .alpha(0.72f)
+            .background(Color(0x99000000), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    ) {
+        Text(text = text, color = Color.White, fontSize = 12.sp)
     }
 }

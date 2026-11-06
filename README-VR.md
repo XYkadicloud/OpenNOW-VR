@@ -25,7 +25,8 @@
 | 部分 | 状态 |
 | --- | --- |
 | Cardboard SDK v1.36.0 源码 vendor + 必要补丁 | 已完成 |
-| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机） | 已完成，有 JVM 单测（6 文件 / 64 个 `@Test`） |
+| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机、**手机端设置规格表**） | 已完成，有 JVM 单测（7 文件 / 71 个 `@Test`） |
+| **手机 2D 端 VR 设置面板**（不进 VR 也能调） | 已实现，**真机未验证**；右下角「VR 设置」按钮 → 8 个滑块 + 3 个开关 + 恢复默认，即时保存 |
 | Android 骨架层（VR 状态、Surface 注册、GL program、Renderer、CardboardView、Compose 覆盖层） | 已完成 |
 | 主工程接线（Gradle 依赖、MainActivity 输入与覆盖层、Streaming 解码 Surface hook、Manifest） | 已完成 |
 | `.github/workflows/vr-build.yml` 两阶段 CI（编 AAR → 单测 + 出 APK）+ AAR/APK 二进制守卫 | 已完成 |
@@ -36,7 +37,8 @@
 | **P3 手柄驱动的可见 VR 设置面板** | **TODO**，菜单模型与手柄命令已就绪，当前面板只显示静态状态文字 |
 | 真机 / 纸盒 / GFN 串流效果 | **未验证**。CI 只能证明「能编译 + 单测通过 + 能出 APK」；GLSL 是运行时编译，CI 抓不到 |
 
-> 一句话：**框架、构建链、主界面回退、视频纹理和黑底渲染已完成，手柄设置面板还没做，画面效果仍待真机验证**。
+> 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端 VR 设置面板已完成；
+> 还没做的是「戴着头显时在 VR 内部用手柄操作的设置面板」，画面效果也仍待真机验证**。
 > 接手的 Agent 请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)（项目位置 / 状态 / 待办 / 文档索引），
 > 技术事实基线见 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)。
 
@@ -66,6 +68,11 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 ---
 
 ## 4. 可调项
+
+**手机端入口**：主界面右下角「**VR 设置**」按钮，不需要进入 VR 就能改下面全部参数；
+改动通过 `VrSession.updateSettings()` 立即写入 `SharedPreferences` 并同步给 VR 渲染，
+杀掉 App 重开后仍然保留。VR 开启时该对话框也能打开（它是独立窗口，覆盖在 CardboardView 之上）。
+单目省电模式对低端机最有效，但纸盒 VR 请保持 `CARDBOARD` 双目。
 
 重点是第一项「串流窗口大小」，可以直接把画面放大。
 
@@ -112,7 +119,8 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 | `42189848032` | `fcdb892` | 成功 | 测试数量断言生效：`6 suites / 58 tests / 0 failures / 0 errors / 0 skipped` |
 | `42192555168` | `11a4d69` | 成功 | **进入 VR 闪退修复版**：AAR 与 APK 两层守卫确认 `libcardboard_sdk_jni.so` 已打进产物 |
 | `42194578267` | `4c67196` | 成功 | docs-only push 回归验证，两个 job 全绿 |
-| `42198812193` | `1a489e9` | **成功** | **本轮代码验证**：主界面回退 + 黑底/OES 渲染 + 低端机优化。两 job 全绿；`6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；人工解包 APK 确认两个必需 `.so` 存在 |
+| `42198812193` | `1a489e9` | **成功** | **主代码验证**：主界面回退 + 黑底/OES 渲染 + 低端机优化。两 job 全绿；`6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；人工解包 APK 确认两个必需 `.so` 存在 |
+| `42200369358` | `bd0f6b4` | 成功 | docs + KDoc 注释改动的回归，两个 job 全绿 |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）；**`42192555168` 之后已不再闪退，

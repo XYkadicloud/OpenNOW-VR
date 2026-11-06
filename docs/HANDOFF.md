@@ -50,6 +50,17 @@ https://github.com/XYkadicloud/OpenNOW-VR
 - 公开仓库，默认分支 `main`
 - 唯一启用的工作流：`.github/workflows/vr-build.yml`（`vr-build`）
 - Actions 页面：`https://github.com/XYkadicloud/OpenNOW-VR/actions`
+- APK 工件名：`opennow-vr-debug-arm64-v8a`（外层 zip 内是 `app-arm64-v8a-debug.apk`）
+
+**上游项目链接（2026-11-06 用 GitHub API 逐一核实可访问）**：
+
+| 用途 | 链接 |
+| --- | --- |
+| **本 fork 的直接来源**（整仓复制的基线） | `https://github.com/XYkadicloud/OpenNOW-Android`，默认分支 `android-native`，HEAD `8811a74`，`2.3.0 / versionCode 186` |
+| 更上游的官方 Android 客户端仓库 | `https://github.com/OpenCloudGaming/OpenNOW-Android`，默认分支 `main`（内容极简） |
+| 上游组织主项目 | `https://github.com/OpenCloudGaming/OpenNOW`，默认分支 `main`，描述 `Custom GeForce Now Client Named OpenNOW` |
+
+> 2.3.8 **不是**这些仓库里的 tag，来自应用内更新 API，见 2.3 / 4.2 节。
 
 ### 1.3 只读参考副本（**不要改，不要提交**）
 
@@ -100,6 +111,7 @@ https://github.com/XYkadicloud/OpenNOW-VR
 | VR 背景 = **纯黑，不做 3D 场景** | 用户原话：「场景的话应该是不用做，直接做黑底，方便节省性能」 |
 | **低端机全套性能优化** | 用户原话：「说明一下要做好全套的性能优化哦。毕竟我也就一个低端机」 |
 | 窗口大小可调 | 用户特别强调「串流的窗口大小」可以放大，其余可调项由助手补充 |
+| **手机平面端直接控制 VR 设置** | 用户原话：「添加一下设置平面手机这边直接就能控制 VR 这边的具体设置」。**不进入 VR** 也要能改全部 VR 参数，且改动即时保存生效 |
 | 目标设备 | Android 10（API 29），只出 `arm64-v8a`，必须 64 位 ARM |
 | 新仓库、公开 | 不要改原仓库 `OpenNOW-Android` |
 
@@ -148,13 +160,14 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | **电视版 UI 完全移除** | 完成 | `ConsoleHomeScreen.kt` 移到 `docs/ui-reference/*.txt`；`OpenNowScreens.kt` 的 `consoleHome` 分支、设置开关、`HomeUiState.load`、`console_home_*` 字符串全部删除；`grep` 编译路径零残留 |
 | **VR 黑底 + 2D 纹理正常渲染** | 代码完成，**真机未验证** | `vr/VrTheaterRenderer.kt`：黑底清屏色、OES 串流纹理、无流时 2D 面板 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
+| **手机 2D 端 VR 设置面板** | 代码完成，**真机未验证** | `vr/VrSettingSpec.kt` + `vr/VrPhoneSettings.kt` + `VrModeHost.kt` 的「VR 设置」按钮；8 个数值滑块 + 3 个开关 + 恢复默认；走 `VrSession.updateSettings()` 持久化；7 个新增 JVM 测试 |
 | Android 10 / API 29 静态兼容性核验 | 完成（静态） | 计划书 12.2；`minSdk 24 / targetSdk 37` |
 
 ### 3.2 已核实但未实现
 
 | 项目 | 说明 |
 | --- | --- |
-| **P3：手柄驱动的 VR 设置面板可见渲染** | `VrMenuModel` / `VrGamepadRouter` / `VrSettingsStore` 已就绪，但**没有**把菜单画成 VR 内可见面板。当前 2D 面板只显示状态文字与提示，不可交互 |
+| **P3：VR 内部、戴头显时用手柄操作的设置面板** | `VrMenuModel` / `VrGamepadRouter` / `VrSettingsStore` 已就绪，但**没有**把菜单画成 VR 内可见面板。注意区分：**手机 2D 端设置面板已完成**（见 3.1），这里指 VR 里那个用手柄调的面板。当前 VR 内 2D 面板只显示状态文字，不可交互 |
 | 完整 2D UI 镜像进 VR | 见 2.2，用户「可以试一下」的可选项，未实现 |
 | 上游 2.3.8 适配 | 阻塞：见 4.2 |
 | 汉化 | 用户说「我其实只需要汉化就行」，语义未确认，**未执行**。不要擅自全量改文案 |
@@ -168,6 +181,8 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 4. 串流开始后，画面是否出现在平面幕布上（OES 纹理、`uSTMatrix` 方向、亮度）。
 5. 手柄调整设置后面板数值是否更新、窗口是否变大。
 6. 低端机发热 / 掉帧情况；`viewerMode=SIMULATION`（单目）是否明显更流畅。
+7. **不进入 VR**，点「VR 设置」→ 拖动「串流窗口大小」→ 关闭对话框 → 再进 VR，幕布是否确实变大；
+   杀掉 App 重开后设置是否仍在（SharedPreferences 持久化）。
 
 > **GLSL shader 是运行时编译，CI 完全抓不到 shader 错误。** 两个 program 都用
 > `runCatching` 包住，最坏情况是黑屏而不是崩溃；真机若黑屏先查 shader 编译日志。
@@ -180,14 +195,17 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 
 1. `git status` / `git log --oneline -6` 确认本地与 `origin/main` 一致、工作区 clean。
 2. 查 GitHub Actions 最新 `vr-build` run：两个 job 全绿，`Assert VR JVM tests actually ran`
-   输出应为 `6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`
-   （原 58 个 + 本轮新增 6 个零分配路径测试）。
+   应显示 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`
+   （原 58 个 + 6 个零分配矩阵测试 + 7 个手机端设置规格测试）。数量以解包
+   `vr-unit-test-report` 的 XML 为准，不要只信文档。
 3. 请用户用**最新** APK 在 Android 10 真机按 3.3 清单复测，拿回结论再继续改渲染。
 
 ### P1 — 剩余功能（按序）
 
 1. **P3 可见设置面板**：把 `VrMenuModel` 渲染进 2D 面板纹理（Canvas 绘制），
    接 `VrGamepadRouter` 的上下/确认/返回，保持纯手柄、无 gaze。当前面板只是静态状态显示。
+   **注意**：手机 2D 端设置面板已完成（`VrPhoneSettings.kt`），这里说的是戴头显时在 VR 内部
+   用手柄操作的那个面板，两者不要混为一谈。
 2. **串流中面板叠加**：串流时是否仍显示半透明设置面板，由用户确认后再做，不要自作主张。
 3. 真机发现文字方向 / OES 方向问题时，只改 `PANEL_FLIP_Y` 或 `uSTMatrix`，不要重写渲染器。
 
@@ -243,8 +261,10 @@ android/app/src/main/java/com/opencloudgaming/opennow/
 android/app/src/main/java/com/opencloudgaming/opennow/vr/
   VrTheaterRenderer.kt               ★黑底 + OES 串流平面 + 2D 面板 + 零分配渲染循环
   VrTheaterView.kt                   CardboardView 子类；viewerMode → setStereoRenderMode
-  VrModeHost.kt                      Compose overlay + 「进入 VR / 退出 VR」按钮
-  VrSession.kt / VrSettings.kt       全局状态与可调项
+  VrModeHost.kt                      ★Compose overlay + 「VR 设置」/「进入 VR / 退出 VR」两个按钮
+  VrPhoneSettings.kt                 ★手机 2D 端 VR 设置对话框（滑块 + 开关 + 恢复默认）
+  VrSettingSpec.kt                   ★纯 Kotlin 设置规格表（范围/步进/读写），UI 与 JVM 测试共用
+  VrSession.kt / VrSettings.kt       全局状态与可调项；updateSettings() = 校验 + 持久化 + 路由同步
   VrVideoSurfaceRegistry.kt          解码器 Surface ↔ GL 线程桥（internal object）
   VrMatrix4.kt / VrHeadPose.kt       纯 Kotlin 数学，含 *Into 零分配变体
   VrScreenGeometry.kt / VrGlProgram.kt / VrMenuModel.kt / VrGamepadRouter.kt / ...
@@ -322,7 +342,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42189848032` | `fcdb892` | 成功：测试数量断言生效，`6 suites / 58 tests` |
 | `42192555168` | `11a4d69` | 成功：闪退修复版，AAR/APK 均含 `libcardboard_sdk_jni.so` |
 | `42194578267` | `4c67196` | 成功：docs-only push 回归验证，两个 job 全绿 |
-| **`42198812193`** | **`1a489e9`** | **成功：本轮代码验证**。电视版 UI 移除 + 黑底/OES 渲染 + 低端机优化 + 64 测试；两个 job 全绿，AAR/APK 两道 JNI 守卫均 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 21304 B、`opennow-vr-debug-arm64-v8a` 47525871 B |
+| **`42198812193`** | **`1a489e9`** | **成功：主代码验证**。电视版 UI 移除 + 黑底/OES 渲染 + 低端机优化 + 64 测试；两个 job 全绿，AAR/APK 两道 JNI 守卫均 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 21304 B、`opennow-vr-debug-arm64-v8a` 47525871 B |
+| `42200369358` | `bd0f6b4` | 成功：docs + KDoc 注释改动的回归；两个 job 全绿 |
 
 **`42198812193` 的人工二进制核验（已执行，非推测）**：
 
