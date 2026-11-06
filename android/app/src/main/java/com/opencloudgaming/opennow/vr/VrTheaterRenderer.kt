@@ -10,6 +10,7 @@ import android.graphics.Typeface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
+import android.util.Log
 import android.view.Surface
 import com.google.cardboard.sdk.CardboardView
 import com.google.cardboard.sdk.HeadTransform
@@ -44,10 +45,13 @@ import javax.microedition.khronos.egl.EGLConfig
  *  to onDrawEye().
  *
  * LOW-END PERFORMANCE BUDGET (OPPO F9 / Helio P60 / Mali-G72 MP3; see HANDOFF.md section 9)
- *  - Zero heap allocation per frame: reused matrices (multiplyInto / scaledRotationInto), reused
- *    direct FloatBuffers, reused Bitmap/Canvas/Paints, no string formatting or logging in
- *    onDrawEye(). The Cardboard SDK's Eye matrices are already preallocated and returned by
- *    reference.
+ *  - Zero heap allocation per NORMAL frame: reused matrices (multiplyInto / scaledRotationInto),
+ *    reused direct FloatBuffers, reused Bitmap/Canvas/Paints, no string formatting in the hot
+ *    path. The Cardboard SDK's Eye matrices are already preallocated and returned by reference.
+ *  - Diagnostic logging (added to locate "VR shows nothing"): lifecycle events and state edges
+ *    log once; the onDrawEye heartbeat logs only once every LOG_INTERVAL_FRAMES (120) frames.
+ *    That single throttled line is the only per-frame-string cost and is dev-only; it does not
+ *    affect steady-state throughput and can be silenced with logcat filters.
  *  - Flat screen => 4 vertices instead of 50 (24-segment strip only when curvature > 0).
  *  - Only ONE textured quad is drawn per eye, including while the menu is open.
  *  - Panel is redrawn only when its content actually changed (menu navigation / settings) and
@@ -104,6 +108,16 @@ class VrTheaterRenderer : CardboardView.Renderer {
     private var lastMenuOpen = false
     private var lastSelectedIndex = -1
 
+    // Diagnostic-only logging state. All access is on the single GL thread, so plain fields are OK.
+    // Per-frame logging is throttled to one line every LOG_INTERVAL_FRAMES; key state changes
+    // (shader link, first video frame, useVideo flips) are logged once at the edge.
+    private var logFrameCounter = 0
+    private var logLastUseVideo: Boolean? = null
+    private var logLastHandlesNull = false
+    private var logLastStatusSkip = false
+    private var logFirstFrameAvailable = false
+    private var logSurfaceCreated = false
+
     // Preallocated render-loop state. Nothing below is allocated inside onDrawEye().
     private val headQuaternion = FloatArray(4).also { it[3] = 1f }
     private val stMatrix = FloatArray(16).also { it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f }
@@ -130,14 +144,23 @@ class VrTheaterRenderer : CardboardView.Renderer {
     }
 
     override fun onSurfaceCreated(config: EGLConfig) {
+        logSurfaceCreated = true
+        Log.d(TAG, "onSurfaceCreated: GL thread surfaced")
         // The SDK clears with the current clear colour once per frame; this makes the background
         // pure black with no extra full-screen clear of our own.
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glDisable(GLES20.GL_DITHER)
 
         // Shader compilation happens at runtime, not in CI. Neither failure may crash VR entry.
-        panel = runCatching { createHandles(PANEL_FRAGMENT_SHADER) }.getOrNull()
-        video = runCatching { createHandles(VIDEO_FRAGMENT_SHADER) }.getOrNull()
+        panel = runCatching { createHandles(PANEL_FRAGMENT_SHADER) }.getOrElse {
+            Log.e(TAG, "PANEL shader link FAILED", it)
+            null
+        }
+        video = runCatching { createHandles(VIDEO_FRAGMENT_SHADER) }.getOrElse {
+            Log.e(TAG, "VIDEO (external-OES) shader link FAILED — falling back to 2D panel", it)
+            null
+        }
+        Log.d(TAG, "onSurfaceCreated: panelProgram=${panel != null} videoProgram=${video != null}")
         // If external-OES is unavailable on an old GLES2 driver, leave the decoder on the ordinary
         // 2D surface and keep showing the 2D panel instead of crashing the GL thread.
 
@@ -147,11 +170,20 @@ class VrTheaterRenderer : CardboardView.Renderer {
         meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
         uploadPanel()
+        Log.d(
+            TAG,
+            "onSurfaceCreated done: panelTextureId=$panelTextureId videoTextureId=$videoTextureId " +
+                "vertexCount=$vertexCount",
+        )
     }
 
     override fun onNewFrame(headTransform: HeadTransform) {
         headTransform.getQuaternion(headQuaternion, 0)
         if (VrVideoSurfaceRegistry.consumeFrameAvailable()) {
+            if (!logFirstFrameAvailable) {
+                logFirstFrameAvailable = true
+                Log.d(TAG, "onNewFrame: FIRST video frame available from decoder")
+            }
             val texture = videoSurfaceTexture
             if (texture != null) {
                 try {
@@ -161,14 +193,20 @@ class VrTheaterRenderer : CardboardView.Renderer {
                     texture.getTransformMatrix(stMatrix)
                     hasVideoFrame = true
                 } catch (e: RuntimeException) {
+                    Log.w(TAG, "onNewFrame: updateTexImage() threw", e)
                     hasVideoFrame = false
                 }
+            } else {
+                Log.w(TAG, "onNewFrame: frame available but videoSurfaceTexture is null")
             }
         }
     }
 
     override fun onDrawEye(eye: CardboardView.Eye) {
         // Deliberately NO glClear here - see the class KDoc.
+        if (!logSurfaceCreated) {
+            Log.w(TAG, "onDrawEye: called BEFORE onSurfaceCreated — renderer not initialised")
+        }
         val current = settings
         val menuOpen = VrSession.menuOpen.value
         val selectedIndex = VrSession.selectedIndex.value
@@ -197,14 +235,55 @@ class VrTheaterRenderer : CardboardView.Renderer {
         // While the menu is open it owns the quad; decoding keeps running underneath so closing
         // the menu returns to a live picture with no reconnection.
         val useVideo = !menuOpen && hasVideoFrame && video != null && videoTextureId != 0
+        if (logLastUseVideo != useVideo) {
+            Log.d(
+                TAG,
+                "onDrawEye: useVideo=$useVideo (menuOpen=$menuOpen hasVideoFrame=$hasVideoFrame " +
+                    "videoProgram=${video != null} videoTextureId=$videoTextureId)",
+            )
+            logLastUseVideo = useVideo
+        }
+
         if (!useVideo && (panelDirty || forcePanelUpload)) {
             uploadPanel()
             forcePanelUpload = false
         }
 
-        if (!useVideo && !menuOpen && !current.showStatus) return
-        val handles = (if (useVideo) video else panel) ?: return
-        if (vertexCount == 0) return
+        // The three original early-returns are preserved in their original order; each also logs
+        // the exact reason the eye draws NOTHING, but only at the state edge so a healthy render
+        // loop stays log-silent.
+        if (!useVideo && !menuOpen && !current.showStatus) {
+            if (!logLastStatusSkip) {
+                logLastStatusSkip = true
+                Log.d(TAG, "onDrawEye: SKIP — panel suppressed by showStatus=false; nothing drawn")
+            }
+            return
+        }
+        logLastStatusSkip = false
+
+        val handles = (if (useVideo) video else panel)
+        if (handles == null) {
+            if (!logLastHandlesNull) {
+                logLastHandlesNull = true
+                Log.w(TAG, "onDrawEye: SKIP — program handles null (useVideo=$useVideo); nothing drawn")
+            }
+            return
+        }
+        logLastHandlesNull = false
+        if (vertexCount == 0) {
+            Log.w(TAG, "onDrawEye: SKIP — vertexCount==0; nothing drawn")
+            return
+        }
+
+        // A throttled heartbeat: proves onDrawEye is being called and reaching glDrawArrays,
+        // without flooding logcat on a low-end device.
+        if (logFrameCounter++ % LOG_INTERVAL_FRAMES == 0) {
+            Log.d(
+                TAG,
+                "onDrawEye: draw frame#=$logFrameCounter useVideo=$useVideo vertexCount=$vertexCount " +
+                    "showStatus=${current.showStatus} panelTextureId=$panelTextureId",
+            )
+        }
 
         // Use the INVERSE head rotation for the view matrix, matching the SDK's
         // HeadTransform.getHeadView() / Eye.applyHeadView(). The forward rotation would make the
@@ -247,6 +326,7 @@ class VrTheaterRenderer : CardboardView.Renderer {
     override fun onSurfaceChanged(width: Int, height: Int) = Unit
 
     override fun onRendererShutdown() {
+        Log.d(TAG, "onRendererShutdown: releasing GL resources")
         VrVideoSurfaceRegistry.clear()
         releaseVideoTexture()
         if (panelTextureId != 0) {
@@ -275,6 +355,12 @@ class VrTheaterRenderer : CardboardView.Renderer {
         meshDirty = true
         lastMenuOpen = false
         lastSelectedIndex = -1
+        // Reset diagnostic state so a second VR entry logs its first frame / first draw again.
+        logFrameCounter = 0
+        logLastUseVideo = null
+        logLastHandlesNull = false
+        logFirstFrameAvailable = false
+        logSurfaceCreated = false
     }
 
     private fun createHandles(fragmentSource: String): ProgramHandles {
@@ -465,6 +551,10 @@ class VrTheaterRenderer : CardboardView.Renderer {
     }
 
     private companion object {
+        const val TAG = "VrTheaterRenderer"
+        /** One heartbeat line per this many onDrawEye calls (both eyes share one counter). */
+        const val LOG_INTERVAL_FRAMES = 120
+
         const val PANEL_W = 768
         const val PANEL_H = 432
         const val MENU_ASPECT = 16f / 9f

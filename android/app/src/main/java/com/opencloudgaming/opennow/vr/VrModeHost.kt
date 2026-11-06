@@ -1,5 +1,6 @@
 package com.opencloudgaming.opennow.vr
 
+import android.util.Log
 import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,12 +45,15 @@ fun VrModeHost() {
         if (enabled) {
             AndroidView(
                 factory = { context ->
+                    Log.d("VrModeHost", "AndroidView.factory: creating VrTheaterView (enabled=$enabled)")
                     VrTheaterView(context).also { view ->
+                        Log.d("VrModeHost", "AndroidView.factory: VrTheaterView created; attaching start-on-attach listener")
                         viewRef = view
                         VrSession.onScanQr = { view.scanViewerQrCode() }
                         // CardboardView.onResume() must run once the GL surface is attached.
                         view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
                             override fun onViewAttachedToWindow(attached: View) {
+                                Log.d("VrModeHost", "onViewAttachedToWindow: calling view.start()")
                                 view.removeOnAttachStateChangeListener(this)
                                 view.start()
                             }

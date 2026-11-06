@@ -306,6 +306,14 @@ docs/                                 见第 5 节
 15. 上游 31e7a71 之前 Home 页是 `if (useSwitchStyle) SwitchStyleHomeScreen else HomeScreen`；
     31e7a71 之后改成 `consoleHome` 分支接管。现在的正确基准是**原版 `HomeScreen`**，
     既不是 console shell 也不是 Switch-style home。
+16. **`vr/` 目录在 3cfcade 之前一条 `Log.*` 都没有**：日志里「零 CardboardView 生命周期日志」
+    是「代码本来就不打日志」，**不能**据此推断「renderer 没画帧」。2026-11-06 起补了诊断日志。
+17. 诊断导出里的 `UnsatisfiedLinkError: libcardboard_sdk_jni.so` 常是 **「Retained Java crash —
+    previous process」**（上一次运行残留），要按 timestamp/uptime 判断是不是当前这次测试；
+    该 so 缺库闪退早在 `11a4d69` 已修复、且用户实测确认「能进入 VR」，不要再当成当前根因。
+18. **`setZOrderOnTop(true)` 是双刃剑**：它让 GL 层成为不透明置顶层，但必须在 surface 创建前
+    设置；从 `init`/`onAttachedToWindow` 遍历子 view 调用不可靠。`3cfcade` 加了它之后真机反而
+    显示「原本的非 VR 界面」（VR 层未出现/透明）。已回退，见 §12。
 
 ---
 
@@ -362,7 +370,11 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42200369358` | `bd0f6b4` | 成功：docs + KDoc 注释改动的回归；两个 job 全绿 |
 | **`42202834080`** | **`e365e03`** | **成功：手机端 VR 设置面板版**。手机 2D 端 VR 设置面板 + 7 个新增测试；两个 job 全绿、无失败步骤；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 23811 B、`opennow-vr-debug-arm64-v8a` 47548120 B |
 | `42206935569` | `203e57a` | **失败（已定位并修复）**：重写 `VrModeHost.kt` 时漏了 `import androidx.compose.runtime.setValue`，`:app:compileDebugKotlin` 报 `'MutableState<VrTheaterView?>' has no method 'setValue'`。**教训**：删掉 `by remember { mutableStateOf(...) }` 之外的 UI 时，别忘了它仍需要 `getValue` + `setValue` 两个 import |
-| **`42208037616`** | **`b19f3ec`** | **成功：当前交接版本**。原生设置页 VR 分区 + 景深逆旋转修复 + 真实帧宽高比 + BACK 无缝退出；两 job 全绿、无失败步骤；人工解包 `7 suites / 75 tests / 0 failures / 0 errors / 0 skipped`，APK 含两个必需 `.so`；artifacts 385622 / 23969 / 47535533 B |
+| **`42208037616`** | **`b19f3ec`** | **成功：交接版本**。原生设置页 VR 分区 + 景深逆旋转修复 + 真实帧宽高比 + BACK 无缝退出；两 job 全绿、无失败步骤；人工解包 `7 suites / 75 tests / 0 failures / 0 errors / 0 skipped`，APK 含两个必需 `.so`；artifacts 385622 / 23969 / 47535533 B |
+| `42211859296` | `4f27e07` | 失败：串流中途切 surface + 手柄菜单 |
+| `42212285185` | `fb64a9a` | 失败：切 surface 后请求关键帧 |
+| `42215232161` | `72e803c` | 失败：`menuKeyClosesThePanelWhenItIsAlreadyOpen` 单测与 combo 键冲突 |
+| **`42219713375`** | **`3cfcade`** | **成功**：修复 combo 冲突 + 手柄长按 D-pad repeat（含 4 新测试）+ `setZOrderOnTop(true)` 层级尝试；两 job 全绿。**但真机实测进入 VR 显示的是「原本的非 VR 手机界面」，VR 层没出现** |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
@@ -487,3 +499,51 @@ FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
 - [ ] 用户在 Android 10 真机按 3.3 复测并反馈（**唯一剩下的关键验证**）
 - [ ] 工作区 `git status` clean，仓库内无 PAT 字面串残留
 - [ ] 提醒用户撤销并重新生成 PAT
+
+---
+
+## 12. 2026-11-06 追加：「进入 VR 显示原本非 VR 界面」诊断与日志方案
+
+### 12.1 现象与核实到的事实
+
+- 用户测的是 **`3cfcade`**（当前 `main`，CI run `42219713375` 全绿）。进入 VR 后看到的是
+  **「原本的 no-VR 界面」**——不是纯黑、不是「全屏 2D 串流」，而是底层 2D 手机 UI 直接透出，
+  VR 层没有出现。
+- 诊断导出 `opennow-android-logs-20261106-211655.txt`（4 MB）里那条
+  `UnsatisfiedLinkError: couldn't find "libcardboard_sdk_jni.so"` 的调用栈虽经过
+  `VrTheaterView.<init> → VrModeHost.kt:45`，但它是 **`[Retained Java crash — previous process]`
+  timestamp 08:56**，当前测试是 13:00–13:14；且该缺库闪退早在 `11a4d69` 已修复、用户实测确认
+  「能进 VR」。**不是本次根因**。
+- 之前「零 CardboardView 生命周期日志 = renderer 没画帧」是**误判**：`vr/` 目录本来就没有
+  任何 `Log.*` 语句（见 §7.16）。
+- `docs/VR_IMPLEMENTATION_PLAN.md` §12.5 早已写明剩余问题是「**渲染内容为空 / 啥也没有**」。
+
+### 12.2 本次改动（只加日志 + 回退置顶，不改渲染逻辑）
+
+| 文件 | 改动 |
+| --- | --- |
+| `VrTheaterView.kt` | **移除 `setZOrderOnTop(true)` / `promoteGlSurface()`**（回到 `fb64a9a` 的层级）；保留 `setKeepScreenOn` / overlay 隐藏；所有生命周期加 `Log.d`（TAG `VrTheaterView`） |
+| `VrTheaterRenderer.kt` | shader 链接失败改 `getOrElse` 记录 `Log.e`；`onSurfaceCreated`/`onNewFrame`/`onRendererShutdown` 加一次性日志；`onDrawEye` 加 **useVideo 跳变 + 三种 SKIP 原因 + 每 120 帧一条节流心跳**；**渲染逻辑与 early-return 顺序完全不变** |
+| `VrSession.kt` | `setEnabled()` 加一行日志 |
+| `VrModeHost.kt` | `AndroidView.factory` / `onViewAttachedToWindow` 加日志 |
+| `docs/HANDOFF.md` / `docs/VR_IMPLEMENTATION_PLAN.md` | 记录结论与日志过滤命令 |
+
+回退 `setZOrderOnTop` 的依据：它把 Cardboard GL SurfaceView 提成不透明置顶层且要求在 surface
+创建前设置；从 `init`/`onAttachedToWindow` 遍历子 view 调用时机不可靠，疑似让 GL 层透明/失效，
+于是底层 2D UI 透出 = 用户看到的「原本的非 VR 界面」。**这只靠真机最终判定**，CI 无法验证画面。
+
+### 12.3 下一步（真机验证，需用户配合）
+
+1. 推本次改动 → CI 出新 APK（工件 `opennow-vr-debug-arm64-v8a`）→ 用户覆盖安装。
+2. 进 VR 前后用 `adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer` 抓日志并回传。
+   判定链：
+   - **没有 `VrSession: setEnabled(true)`** → 开关/按键没通。
+   - **有 setEnabled 但无 `VrModeHost: AndroidView.factory`** → Compose 分支没渲染 VR host。
+   - **有 factory 但无 `VrTheaterRenderer: onSurfaceCreated`** → Cardboard GL surface 没起来（回到 JNI/SDK 层）。
+   - **有 onSurfaceCreated 但 shader `link FAILED`** → shader 编译问题。
+   - **有 onSurfaceCreated、有 draw 心跳，但 `SKIP — ...`** → 定位到具体「啥也没画」原因。
+   - **一切都正常但用户仍看不到** → 纯层级/compositing 问题，再评估 `setZOrderMediaOverlay` 或
+     Compose `zIndex`，而不是 `setZOrderOnTop`。
+3. 依据日志结果决定最终层级修复；**在拿到日志前不要再猜、不要再改渲染**。
+
+> 本次只改诊断与回退，不含 shader/层级的新修复。所有判断以真机日志为准。

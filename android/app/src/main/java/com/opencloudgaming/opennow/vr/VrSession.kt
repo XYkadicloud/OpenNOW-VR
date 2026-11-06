@@ -1,6 +1,7 @@
 package com.opencloudgaming.opennow.vr
 
 import android.content.Context
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +56,7 @@ object VrSession {
 
     fun setEnabled(value: Boolean) {
         if (_enabled.value == value) return
+        Log.d("VrSession", "setEnabled($value): toggling VR; router.vrEnabled=$value")
         _enabled.value = value
         router.vrEnabled = value
         if (!value) {
