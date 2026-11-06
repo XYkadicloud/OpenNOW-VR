@@ -1,0 +1,150 @@
+package com.opencloudgaming.opennow
+
+import android.view.KeyEvent
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class StreamKeyboardBehaviorTest {
+    @Test
+    fun softKeyboardSpaceUsesAKeyStrokeInsteadOfUnicodeText() {
+        assertEquals(
+            listOf(StreamKeyboardInputChunk.SpaceKey),
+            streamKeyboardInputChunks(" "),
+        )
+    }
+
+    @Test
+    fun unicodeTextRunsStayOrderedAroundSpaceKeys() {
+        assertEquals(
+            listOf(
+                StreamKeyboardInputChunk.Text("hello"),
+                StreamKeyboardInputChunk.SpaceKey,
+                StreamKeyboardInputChunk.SpaceKey,
+                StreamKeyboardInputChunk.Text("🙂world"),
+            ),
+            streamKeyboardInputChunks("hello  🙂world"),
+        )
+    }
+
+    @Test
+    fun usKeyboardSymbolsBecomeKeyStrokesInPasswordText() {
+        assertEquals(
+            listOf(
+                StreamKeyboardInputChunk.Text("pass"),
+                StreamKeyboardInputChunk.SymbolKey('*'),
+                StreamKeyboardInputChunk.Text("word"),
+                StreamKeyboardInputChunk.SymbolKey('!'),
+            ),
+            streamKeyboardInputChunks("pass*word!", physicalSymbols = true),
+        )
+        val star = InputEncoder.mapTextCharToKeySpec('*')
+        assertEquals(0x38, star?.keycode)
+        assertEquals(0x0009, star?.scancode)
+        assertTrue(star?.shift == true)
+    }
+
+    @Test
+    fun usPasswordDotUsesAnUnshiftedPhysicalPeriodKey() {
+        assertEquals(
+            listOf(
+                StreamKeyboardInputChunk.Text("pass"),
+                StreamKeyboardInputChunk.SymbolKey('.'),
+                StreamKeyboardInputChunk.Text("word"),
+            ),
+            streamKeyboardInputChunks("pass.word", physicalSymbols = true),
+        )
+        val period = InputEncoder.mapTextCharToKeySpec('.')
+        assertEquals(0xbe, period?.keycode)
+        assertEquals(0x0034, period?.scancode)
+        assertFalse(period?.shift ?: true)
+    }
+
+    @Test
+    fun otherLayoutsAndInternationalCharactersStayOnUnicodePath() {
+        assertEquals(
+            listOf(StreamKeyboardInputChunk.Text("é*")),
+            streamKeyboardInputChunks("é*"),
+        )
+        assertEquals(
+            listOf(StreamKeyboardInputChunk.Text("é"), StreamKeyboardInputChunk.SymbolKey('*')),
+            streamKeyboardInputChunks("é*", physicalSymbols = true),
+        )
+    }
+
+    @Test
+    fun emptySoftKeyboardEditProducesNoInputChunks() {
+        assertEquals(emptyList<StreamKeyboardInputChunk>(), streamKeyboardInputChunks(""))
+    }
+
+    @Test
+    fun emptyNewDraftHasNothingToType() {
+        assertEquals(StreamKeyboardEdit.None, streamKeyboardEdit(null, ""))
+    }
+
+    @Test
+    fun newDraftIsAppendedToTheRemoteField() {
+        assertEquals(StreamKeyboardEdit.Append("hello"), streamKeyboardEdit(null, "hello"))
+    }
+
+    @Test
+    fun unchangedMirroredTextIsNotDuplicated() {
+        assertEquals(StreamKeyboardEdit.None, streamKeyboardEdit("hello", "hello"))
+    }
+
+    @Test
+    fun typingAtTheEndOnlyAppendsTheNewSuffix() {
+        assertEquals(StreamKeyboardEdit.Append(" there"), streamKeyboardEdit("hello", "hello there"))
+    }
+
+    @Test
+    fun deletingAtTheEndUsesBackspace() {
+        assertEquals(StreamKeyboardEdit.Backspace(2), streamKeyboardEdit("hello", "hel"))
+    }
+
+    @Test
+    fun deletingAnEmojiUsesOneRemoteBackspace() {
+        assertEquals(StreamKeyboardEdit.Backspace(1), streamKeyboardEdit("hello 🙂", "hello "))
+    }
+
+    @Test
+    fun editingInTheMiddleRewindsOnlyTheChangedSuffix() {
+        assertEquals(StreamKeyboardEdit.ReplaceSuffix(4, "allo"), streamKeyboardEdit("hello", "hallo"))
+    }
+
+    @Test
+    fun imeEmailCorrectionDoesNotSelectAllOrClearTheRemoteField() {
+        assertEquals(
+            StreamKeyboardEdit.ReplaceSuffix(5, "il.com"),
+            streamKeyboardEdit("user@gmal.com", "user@gmail.com"),
+        )
+    }
+
+    @Test
+    fun composingReplacementCountsUnicodeCharactersInsteadOfSurrogateHalves() {
+        assertEquals(StreamKeyboardEdit.ReplaceSuffix(2, "🙃x"), streamKeyboardEdit("a🙂x", "a🙃x"))
+    }
+
+    @Test
+    fun typingAnEmailAndPastingItProduceTheSameRemoteText() {
+        val email = "a.b+test@gmail.com"
+        val typed = email.indices.joinToString("") { index ->
+            (streamKeyboardEdit(email.take(index), email.take(index + 1)) as StreamKeyboardEdit.Append).text
+        }
+        assertEquals(StreamKeyboardEdit.Append(typed), streamKeyboardEdit(null, email))
+    }
+
+    @Test
+    fun hardwareKeyboardRepeatsAreSuppressedAfterInitialKeyDown() {
+        assertFalse(shouldSuppressHardwareKeyboardRepeat(true, KeyEvent.ACTION_DOWN, repeatCount = 0))
+        assertTrue(shouldSuppressHardwareKeyboardRepeat(true, KeyEvent.ACTION_DOWN, repeatCount = 1))
+        assertTrue(shouldSuppressHardwareKeyboardRepeat(true, KeyEvent.ACTION_DOWN, repeatCount = 200))
+    }
+
+    @Test
+    fun keyUpAndNonHardwareSourcesAreNotSuppressed() {
+        assertFalse(shouldSuppressHardwareKeyboardRepeat(true, KeyEvent.ACTION_UP, repeatCount = 1))
+        assertFalse(shouldSuppressHardwareKeyboardRepeat(false, KeyEvent.ACTION_DOWN, repeatCount = 1))
+    }
+}

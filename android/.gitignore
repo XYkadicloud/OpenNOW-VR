@@ -1,0 +1,11 @@
+.gradle/
+.idea/
+build/
+local.properties
+captures/
+*.iml
+app/build/
+app/release/
+.kotlin/
+!buildSrc/src/test/
+!buildSrc/src/test/**

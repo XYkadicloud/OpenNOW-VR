@@ -1,0 +1,56 @@
+package com.opencloudgaming.opennow.vr
+
+import android.content.Context
+
+/** Persists VR settings. Only this class and VrSession touch SharedPreferences. */
+class VrSettingsStore(context: Context) {
+    private val prefs = context.applicationContext
+        .getSharedPreferences("opennow_vr_settings", Context.MODE_PRIVATE)
+
+    fun load(): VrSettings = VrSettings(
+        screenScale = prefs.getFloat(K_SCALE, VrSettings.DEFAULT.screenScale),
+        screenDistanceMeters = prefs.getFloat(K_DISTANCE, VrSettings.DEFAULT.screenDistanceMeters),
+        brightness = prefs.getFloat(K_BRIGHTNESS, VrSettings.DEFAULT.brightness),
+        curvature = prefs.getFloat(K_CURVATURE, VrSettings.DEFAULT.curvature),
+        screenVerticalOffset = prefs.getFloat(K_OFFSET, VrSettings.DEFAULT.screenVerticalOffset),
+        viewerMode = runCatching {
+            VrViewerMode.valueOf(prefs.getString(K_MODE, VrSettings.DEFAULT.viewerMode.name) ?: "")
+        }.getOrDefault(VrSettings.DEFAULT.viewerMode),
+        headTrackingEnabled = prefs.getBoolean(K_HEAD, VrSettings.DEFAULT.headTrackingEnabled),
+        headTrackingSensitivity = prefs.getFloat(K_HEAD_SENS, VrSettings.DEFAULT.headTrackingSensitivity),
+        gamepadDeadZone = prefs.getFloat(K_DEAD_ZONE, VrSettings.DEFAULT.gamepadDeadZone),
+        menuRepeatMs = prefs.getLong(K_REPEAT, VrSettings.DEFAULT.menuRepeatMs),
+        showStatus = prefs.getBoolean(K_STATUS, VrSettings.DEFAULT.showStatus),
+    ).sanitized()
+
+    fun save(settings: VrSettings) {
+        val s = settings.sanitized()
+        prefs.edit()
+            .putFloat(K_SCALE, s.screenScale)
+            .putFloat(K_DISTANCE, s.screenDistanceMeters)
+            .putFloat(K_BRIGHTNESS, s.brightness)
+            .putFloat(K_CURVATURE, s.curvature)
+            .putFloat(K_OFFSET, s.screenVerticalOffset)
+            .putString(K_MODE, s.viewerMode.name)
+            .putBoolean(K_HEAD, s.headTrackingEnabled)
+            .putFloat(K_HEAD_SENS, s.headTrackingSensitivity)
+            .putFloat(K_DEAD_ZONE, s.gamepadDeadZone)
+            .putLong(K_REPEAT, s.menuRepeatMs)
+            .putBoolean(K_STATUS, s.showStatus)
+            .apply()
+    }
+
+    private companion object {
+        const val K_SCALE = "screenScale"
+        const val K_DISTANCE = "screenDistance"
+        const val K_BRIGHTNESS = "brightness"
+        const val K_CURVATURE = "curvature"
+        const val K_OFFSET = "verticalOffset"
+        const val K_MODE = "viewerMode"
+        const val K_HEAD = "headTracking"
+        const val K_HEAD_SENS = "headSensitivity"
+        const val K_DEAD_ZONE = "gamepadDeadZone"
+        const val K_REPEAT = "menuRepeatMs"
+        const val K_STATUS = "showStatus"
+    }
+}

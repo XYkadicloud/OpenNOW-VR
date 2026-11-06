@@ -1,0 +1,157 @@
+name: vr-build
+
+# Single source of truth for verification. Everything is compiled on GitHub; the local
+# workstation has no Android SDK / Gradle / JDK 17.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # Google Cardboard SDK v1.36.0 has no Maven artifact. Build the AAR once from the vendored
+  # upstream sources and hand it to the app job as an artifact. This is a SEPARATE Gradle build
+  # (AGP 9.2.0 / Gradle 9.8.0) from the host app (AGP 9.4.0 / Gradle 9.7.1).
+  cardboard-aar:
+    name: build-cardboard-sdk-aar
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: third_party/cardboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages for the Cardboard build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "Android SDK at: $SDK"
+          SDKMGR="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f 2>/dev/null | head -1)"
+          echo "sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" --install "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.14206865" "cmake;3.31.6"
+          echo "sdk.dir=$SDK" > local.properties
+
+      - name: Build sdk-debug.aar (assembleDebug, NOT release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export CMAKE="$SDK/cmake/3.31.6/bin/cmake"
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          # The SDK's release build type has minifyEnabled true and would obfuscate its public API.
+          ./gradlew --no-daemon --no-configuration-cache :sdk:assembleDebug
+          ls -la sdk/build/outputs/aar/
+
+      - name: Upload the AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: cardboard-sdk-aar
+          path: third_party/cardboard/sdk/build/outputs/aar/sdk-debug.aar
+          if-no-files-found: error
+
+  app:
+    name: vr-unit-tests-and-debug-apk
+    needs: cardboard-aar
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    env:
+      # Controls both Gradle abiFilters and the Rust NVST target list (build_nvst.py).
+      OPENNOW_ABIS: arm64-v8a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust (single Android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "Android SDK at: $SDK"
+          SDKMGR="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f 2>/dev/null | head -1)"
+          echo "sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" --install "platforms;android-37.0" "platforms;android-37.1" "platforms;android-37.2" "build-tools;37.0.0" "build-tools;36.0.0" "ndk;29.0.14206865" "cmake;3.31.6"
+          echo "sdk.dir=$SDK" > local.properties
+
+      - name: Download the Cardboard SDK AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: cardboard-sdk-aar
+          path: android/app/libs
+
+      - name: Normalize the AAR filename
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/libs
+          mv -v app/libs/sdk-debug.aar app/libs/cardboard-sdk.aar
+          ls -la app/libs
+
+      - name: Run VR JVM unit tests and build the debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export CMAKE="$SDK/cmake/3.31.6/bin/cmake"
+          export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          ./gradlew --no-daemon --no-configuration-cache \
+            -Popennow.abis="$OPENNOW_ABIS" \
+            :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Collect the APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../out
+          find app/build/outputs/apk -name '*.apk' -exec cp -v {} ../out/app-arm64-v8a-debug.apk \;
+          ls -la ../out
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: opennow-vr-debug-arm64-v8a
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: Upload the unit test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vr-unit-test-report
+          path: android/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore

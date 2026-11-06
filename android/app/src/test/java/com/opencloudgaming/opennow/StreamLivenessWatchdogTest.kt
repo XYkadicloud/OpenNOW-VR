@@ -1,0 +1,254 @@
+package com.opencloudgaming.opennow
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class StreamLivenessWatchdogTest {
+    @Test
+    fun decodedResolutionTrackerAcceptsInitialAndRuntimeModeChanges() {
+        val tracker = DecodedResolutionTracker()
+
+        val initial = tracker.observe(width = 2560, height = 1440)
+        val duplicate = tracker.observe(width = 2560, height = 1440)
+        val uplayModeChange = tracker.observe(width = 1280, height = 720)
+
+        assertEquals(true, initial?.isInitial)
+        assertEquals(null, duplicate)
+        assertEquals(false, uplayModeChange?.isInitial)
+        assertEquals(2560, uplayModeChange?.previousWidth)
+        assertEquals(1440, uplayModeChange?.previousHeight)
+        assertEquals(1280, uplayModeChange?.width)
+        assertEquals(720, uplayModeChange?.height)
+    }
+
+    @Test
+    fun decodedResolutionTrackerIgnoresInvalidSizesWithoutLosingCurrentMode() {
+        val tracker = DecodedResolutionTracker()
+        tracker.observe(width = 1920, height = 1080)
+
+        assertEquals(null, tracker.observe(width = 0, height = 720))
+        val change = tracker.observe(width = 1600, height = 900)
+
+        assertEquals(1920, change?.previousWidth)
+        assertEquals(1080, change?.previousHeight)
+    }
+
+    @Test
+    fun advancedCodecRestartWaitsForDecoderReleaseAfterStablePlayback() {
+        assertEquals(180L, advancedCodecRestartSettleDelayMs(VideoCodec.AV1, hadStableMedia = true))
+        assertEquals(180L, advancedCodecRestartSettleDelayMs(VideoCodec.H265, hadStableMedia = true))
+        assertEquals(0L, advancedCodecRestartSettleDelayMs(VideoCodec.H264, hadStableMedia = true))
+        assertEquals(0L, advancedCodecRestartSettleDelayMs(VideoCodec.AV1, hadStableMedia = false))
+    }
+
+    @Test
+    fun androidTvAllowsSlowHardwareDecoderStartupBeforeRetry() {
+        val tv = streamRecoveryTiming(androidTvProfile = true)
+        val mobile = streamRecoveryTiming(androidTvProfile = false)
+
+        assertEquals(5_000L, tv.keyframeAfterMs)
+        assertEquals(2_500L, tv.keyframeIntervalMs)
+        assertEquals(14_000L, tv.restartAfterMs)
+        assertEquals(5_000L, mobile.keyframeAfterMs)
+        assertEquals(2_500L, mobile.keyframeIntervalMs)
+        assertEquals(10_000L, mobile.restartAfterMs)
+        assertEquals(14_000L, firstVideoFrameRecoveryTimeoutMs(androidTvProfile = true))
+        assertEquals(10_000L, firstVideoFrameRecoveryTimeoutMs(androidTvProfile = false))
+    }
+
+    @Test
+    fun firstFrameRecoveryRetriesTheSelectedProfileWithoutChangingIt() {
+        assertEquals(
+            FirstFrameRecoveryStep.RetryRequestedProfile,
+            firstFrameRecoveryStep(
+                transportHasStableMedia = false,
+                reconnectAttempts = 0,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+        assertEquals(
+            FirstFrameRecoveryStep.RetrySelectedProfile,
+            firstFrameRecoveryStep(
+                transportHasStableMedia = false,
+                reconnectAttempts = 1,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+        assertEquals(
+            FirstFrameRecoveryStep.ContinueBoundedTransportRecovery,
+            firstFrameRecoveryStep(
+                transportHasStableMedia = false,
+                reconnectAttempts = 2,
+                selectedProfileRetryApplied = true,
+            ),
+        )
+    }
+
+    @Test
+    fun networkTransportRetriesPreserveTheRequestedCodec() {
+        assertFalse(
+            transportRestartShouldRetrySelectedProfile(
+                videoFailure = false,
+                reconnectAttempts = 1,
+                transportHasStableMedia = false,
+            ),
+        )
+        assertTrue(
+            transportRestartShouldRetrySelectedProfile(
+                videoFailure = true,
+                reconnectAttempts = 1,
+                transportHasStableMedia = false,
+            ),
+        )
+    }
+
+    @Test
+    fun repeatedStableAdvancedCodecStallsRetrySelectedProfileOnlyOnTv() {
+        assertFalse(
+            repeatedStableMediaStallShouldRetrySelectedProfile(
+                androidTvProfile = true,
+                transportCodec = VideoCodec.AV1,
+                completedStableMediaStallRestarts = 1,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+        assertTrue(
+            repeatedStableMediaStallShouldRetrySelectedProfile(
+                androidTvProfile = true,
+                transportCodec = VideoCodec.AV1,
+                completedStableMediaStallRestarts = 2,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+        assertFalse(
+            repeatedStableMediaStallShouldRetrySelectedProfile(
+                androidTvProfile = false,
+                transportCodec = VideoCodec.AV1,
+                completedStableMediaStallRestarts = 2,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+        assertFalse(
+            repeatedStableMediaStallShouldRetrySelectedProfile(
+                androidTvProfile = true,
+                transportCodec = VideoCodec.H264,
+                completedStableMediaStallRestarts = 2,
+                selectedProfileRetryApplied = false,
+            ),
+        )
+    }
+
+    @Test
+    fun requestsKeyframesBeforeRestartingStalledMedia() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+
+        assertEquals(StreamLivenessAction.None, watchdog.observe(0L, bytesReceived = 10L, framesDecoded = 1L, connected = true))
+
+        val first = watchdog.observe(1_000L, bytesReceived = 10L, framesDecoded = 1L, connected = true)
+        assertTrue(first is StreamLivenessAction.RequestKeyframe)
+        assertEquals(1, (first as StreamLivenessAction.RequestKeyframe).attempt)
+
+        assertEquals(StreamLivenessAction.None, watchdog.observe(1_200L, bytesReceived = 10L, framesDecoded = 1L, connected = true))
+
+        val second = watchdog.observe(1_500L, bytesReceived = 10L, framesDecoded = 1L, connected = true)
+        assertTrue(second is StreamLivenessAction.RequestKeyframe)
+        assertEquals(2, (second as StreamLivenessAction.RequestKeyframe).attempt)
+
+        val restart = watchdog.observe(3_000L, bytesReceived = 10L, framesDecoded = 1L, connected = true)
+        assertTrue(restart is StreamLivenessAction.RestartTransport)
+    }
+
+    @Test
+    fun progressClearsPendingStallRecovery() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+        assertEquals(StreamLivenessAction.None, watchdog.observe(0L, bytesReceived = 10L, framesDecoded = 1L, connected = true))
+        assertTrue(watchdog.observe(1_000L, bytesReceived = 10L, framesDecoded = 1L, connected = true) is StreamLivenessAction.RequestKeyframe)
+        assertEquals(StreamLivenessAction.None, watchdog.observe(1_200L, bytesReceived = 11L, framesDecoded = 2L, connected = true))
+        assertEquals(StreamLivenessAction.None, watchdog.observe(1_900L, bytesReceived = 11L, framesDecoded = 2L, connected = true))
+    }
+
+    @Test
+    fun slowButProgressingPlaybackDoesNotRestartTheTransport() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+        repeat(10) { sample ->
+            assertEquals(
+                StreamLivenessAction.None,
+                watchdog.observe(
+                    nowMs = sample * 1_000L,
+                    bytesReceived = (sample + 1) * 1_000L,
+                    framesDecoded = (sample + 1).toLong(),
+                    connected = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun incomingBytesDoNotHideDecoderFrameStall() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+        assertEquals(StreamLivenessAction.None, watchdog.observe(100L, bytesReceived = 10L, framesDecoded = 0L, connected = true))
+        assertEquals(StreamLivenessAction.None, watchdog.observe(900L, bytesReceived = 100L, framesDecoded = 0L, connected = true))
+
+        val first = watchdog.observe(1_000L, bytesReceived = 200L, framesDecoded = 0L, connected = true)
+        assertTrue(first is StreamLivenessAction.RequestKeyframe)
+    }
+
+    @Test
+    fun fallsBackToBytesWhenFrameCounterIsMissing() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+        assertEquals(StreamLivenessAction.None, watchdog.observe(900L, bytesReceived = 10L, framesDecoded = null, connected = true))
+        assertEquals(StreamLivenessAction.None, watchdog.observe(1_700L, bytesReceived = 20L, framesDecoded = null, connected = true))
+        assertEquals(StreamLivenessAction.None, watchdog.observe(2_500L, bytesReceived = 30L, framesDecoded = null, connected = true))
+    }
+
+    @Test
+    fun reportsMediaProgressSeparatelyFromTransportConnectivity() {
+        val watchdog = StreamLivenessWatchdog(
+            keyframeAfterMs = 1_000L,
+            keyframeIntervalMs = 500L,
+            restartAfterMs = 3_000L,
+        )
+
+        watchdog.markConnected(0L)
+        watchdog.observe(100L, bytesReceived = 10L, framesDecoded = 0L, connected = true)
+        assertEquals(false, watchdog.latestObservationProgressed)
+
+        watchdog.observe(200L, bytesReceived = 20L, framesDecoded = 1L, connected = true)
+        assertEquals(true, watchdog.latestObservationProgressed)
+
+        watchdog.observe(300L, bytesReceived = 30L, framesDecoded = 1L, connected = true)
+        assertEquals(false, watchdog.latestObservationProgressed)
+    }
+}

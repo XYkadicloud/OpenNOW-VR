@@ -1,0 +1,889 @@
+package com.opencloudgaming.opennow
+
+import android.Manifest
+import android.app.PictureInPictureParams
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.media.AudioManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
+import androidx.annotation.RequiresApi
+import android.util.Rational
+import android.view.Display
+import android.view.InputDevice
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.opencloudgaming.opennow.vr.VrModeHost
+import com.opencloudgaming.opennow.vr.VrSession
+
+class MainActivity : ComponentActivity() {
+    private val viewModel: OpenNowViewModel by viewModels()
+    private val mascotActivity = MascotActivityTracker()
+    private val queueStatusNotifier by lazy { AndroidQueueStatusNotifier(this) }
+    private val streamKeepAliveNotifier by lazy { AndroidStreamKeepAliveNotifier(this) }
+    private var notificationPermissionRequested = false
+    private var lastHatXKeyCode: Int? = null
+    private var lastHatYKeyCode: Int? = null
+    private var streamSystemUiActive = false
+    private var spaceUiSystemBarsHidden = false
+    private var spaceUiAppearanceActive = false
+    private var defaultLightStatusBars = false
+    private var defaultLightNavigationBars = false
+    private var streamDisplayRefreshActive = false
+    private var streamDisplayRefreshFps = 60
+    private var streamSystemUiEnforcerJob: Job? = null
+    private var lastStreamSystemUiInputReapplyMs = 0L
+    private var externalMousePointerCaptureRequestPending = false
+    private var defaultRequestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+    private var phoneStreamOrientationLocked = false
+    private var spaceUiOrientationLocked = false
+    private var streamPanelExpanded = false
+    private var streamPictureInPictureReady = false
+    private var streamPictureInPictureAspectRatio = Rational(16, 9)
+    private var systemWallpaperWindowVisible: Boolean? = null
+    private var startupDataReady = false
+    private var pendingExternalLaunchIntent: Intent? = null
+    private var pendingLocalNetworkIntent: Intent? = null
+    private val localNetworkPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val pendingIntent = pendingLocalNetworkIntent
+        pendingLocalNetworkIntent = null
+        if (granted && startupDataReady && pendingIntent != null) {
+            viewModel.handleExternalLaunchIntent(pendingIntent)
+        }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(localizedAndroidContext(newBase))
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        WindowCompat.getInsetsController(window, window.decorView).let {
+            defaultLightStatusBars = it.isAppearanceLightStatusBars
+            defaultLightNavigationBars = it.isAppearanceLightNavigationBars
+        }
+        defaultRequestedOrientation = requestedOrientation
+        volumeControlStream = AudioManager.STREAM_MUSIC
+        val openNowApplication = application as OpenNowApplication
+        HomeUiState.load(this)
+        pendingExternalLaunchIntent = intent
+        // VR is an in-Activity overlay; load persisted settings before Compose starts.
+        VrSession.attach(this)
+        setContent {
+            var ready by remember { mutableStateOf(false) }
+            LaunchedEffect(openNowApplication) {
+                openNowApplication.awaitStartupData()
+                ready = true
+            }
+            // VrModeHost is a pass-through Box while VR is off, so the original UI is unchanged.
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (ready) {
+                    CompositionLocalProvider(LocalMascotActivity provides mascotActivity) {
+                        OpenNowApp(
+                            viewModel = viewModel,
+                            onMicrophoneCaptureActiveChange = streamKeepAliveNotifier::setMicrophoneCaptureActive,
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color(0xFF05070B)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(color = Color(0xFF69E6FF))
+                    }
+                }
+                VrModeHost()
+            }
+        }
+        lifecycleScope.launch {
+            openNowApplication.awaitStartupData()
+            startupDataReady = true
+            viewModel.setAndroidPictureInPictureActive(isAndroidPictureInPictureActive())
+            pendingExternalLaunchIntent?.let(::handleExternalLaunchIntent)
+            pendingExternalLaunchIntent = null
+            viewModel.state.collect { state ->
+                requestQueueNotificationPermissionIfNeeded(state)
+                queueStatusNotifier.update(state)
+                streamKeepAliveNotifier.update(state)
+                val streamActive = state.page == AppPage.Stream && state.streamStatus != "idle"
+                applySystemWallpaperWindow(
+                    shouldShowSystemWallpaperBackground(
+                        settings = state.settings,
+                        inStream = state.page == AppPage.Stream,
+                    ),
+                )
+                spaceUiOrientationLocked = state.settings.experimentalSpaceUi
+                applyPhoneStreamOrientationLock(
+                    shouldLockPhoneStreamLandscape(state, resources.configuration.smallestScreenWidthDp),
+                )
+                updateStreamPictureInPicture(
+                    ready = state.page == AppPage.Stream &&
+                        state.streamStatus == "streaming" &&
+                        state.streamSession?.isReadyForStream() == true,
+                    settings = state.activeStreamSettings ?: state.settings.stream,
+                )
+                updateSpaceUiSystemBars(state)
+                applyStreamSystemUi(streamActive)
+                applyStreamDisplayRefreshRate(streamActive, state.activeStreamSettings?.fps ?: state.settings.stream.fps)
+            }
+        }
+    }
+
+    /**
+     * Lets Android's wallpaper service remain the owner of static, live, and motion wallpapers.
+     * Copying a wallpaper bitmap here would freeze live/4D effects and can consume significant
+     * memory, so OpenNOW instead makes only its app-shell window transparent. The theme keeps the
+     * window surface transparent from creation; changing its pixel format after Compose has attached
+     * does not reliably recreate the surface on OEM Android builds.
+     */
+    private fun applySystemWallpaperWindow(visible: Boolean) {
+        if (systemWallpaperWindowVisible == visible) return
+        systemWallpaperWindowVisible = visible
+        if (visible) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (startupDataReady) {
+            handleExternalLaunchIntent(intent)
+        } else {
+            pendingExternalLaunchIntent = intent
+        }
+    }
+
+    private fun handleExternalLaunchIntent(intent: Intent) {
+        // A pinned game icon is one of the GameShortcut<n> activity aliases; the alias carries no
+        // data of its own, so the game id comes from the slot mapping written when it was pinned.
+        val shortcutGameId = GameShortcuts.gameIdForLaunchComponent(this, intent.component)
+        if (shortcutGameId != null) {
+            viewModel.handleExternalLaunchIntent(
+                Intent(Intent.ACTION_VIEW, Uri.parse("opennow://launch/$shortcutGameId")).apply {
+                    putExtra("id", shortcutGameId)
+                },
+            )
+            return
+        }
+        if (isLocalTvPairUri(intent.data) && !hasAndroidLocalNetworkAccess()) {
+            pendingLocalNetworkIntent = intent
+            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            return
+        }
+        viewModel.handleExternalLaunchIntent(intent)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (startupDataReady) updateSpaceUiSystemBars(viewModel.state.value, newConfig)
+    }
+
+    private fun updateSpaceUiSystemBars(state: OpenNowUiState, config: Configuration = resources.configuration) {
+        val enabled = state.settings.experimentalSpaceUi && state.authSession != null && !shouldShowSetupFlow(state.settings)
+        if (spaceUiAppearanceActive != enabled) {
+            spaceUiAppearanceActive = enabled
+            WindowCompat.getInsetsController(window, window.decorView).let {
+                it.isAppearanceLightStatusBars = if (enabled) false else defaultLightStatusBars
+                it.isAppearanceLightNavigationBars = if (enabled) false else defaultLightNavigationBars
+            }
+        }
+        val hidden = shouldHideSpaceUiSystemBars(
+            enabled = enabled,
+            landscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE,
+            page = state.page,
+        )
+        if (spaceUiSystemBarsHidden == hidden) return
+        spaceUiSystemBarsHidden = hidden
+        applyStreamSystemBars(streamSystemUiActive)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mascotActivity.updateResumed(true)
+        if (startupDataReady) {
+            viewModel.setAndroidPictureInPictureActive(isAndroidPictureInPictureActive())
+            // A process that was frozen or killed by an aggressive OEM memory manager comes back
+            // with dead sockets and possibly stale tokens. The catalogue is fetched once at
+            // startup and never again, so without this the Store stays empty until a manual pull.
+            viewModel.onAppForegrounded()
+        }
+        if (streamSystemUiActive) {
+            applyStreamSystemUi(true, force = true)
+            applyStreamDisplayRefreshRate(streamDisplayRefreshActive, streamDisplayRefreshFps, force = true)
+        } else if (spaceUiSystemBarsHidden) {
+            applyStreamSystemBars(active = false)
+        }
+        if (phoneStreamOrientationLocked || spaceUiOrientationLocked) {
+            applyPhoneStreamOrientationLock(phoneStreamOrientationLocked)
+        }
+    }
+
+    override fun onPause() {
+        mascotActivity.updateResumed(false)
+        super.onPause()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        mascotActivity.onKey(event)
+        // VR settings panel (physical gamepad only) gets first refusal. With VR off this returns
+        // false for every key except the L1+R1 / SELECT+START toggle combo.
+        if (VrSession.onKeyEvent(event)) return true
+        if (streamSystemUiActive && event.action == KeyEvent.ACTION_DOWN && event.shouldReapplyStreamSystemUi()) {
+            enforceStreamSystemUiFromInput()
+        }
+        if (streamSystemUiActive && event.isAndroidVolumeKey()) {
+            return super.dispatchKeyEvent(event)
+        }
+        if (NativeStreamInputRouter.dispatchKey(event)) {
+            return true
+        }
+        val normalizedStreamUiKeyCode = NativeStreamInputRouter.normalizedStreamUiKeyCode(event)
+        if (normalizedStreamUiKeyCode != null && normalizedStreamUiKeyCode != event.keyCode) {
+            return dispatchSyntheticStreamUiKey(normalizedStreamUiKeyCode, event)
+        }
+        if (NativeStreamInputRouter.isControllerAppBackKey(event)) {
+            // Invoke ComponentActivity's Back dispatcher so Compose's nearest BackHandler gets
+            // first refusal. Synthesizing KEYCODE_BACK through the Window can finish the Activity
+            // without visiting the nested settings handler on some Android builds.
+            if (event.action == KeyEvent.ACTION_UP) {
+                onBackPressedDispatcher.onBackPressed()
+            }
+            return true
+        }
+        if (event.shouldVirtualizeControllerUiNavigation()) {
+            // Android TV keyboards reliably accept virtual D-pad events (the same shape remotes
+            // emit), while several IMEs ignore navigation events from a physical gamepad device.
+            return dispatchSyntheticStreamUiKey(event.keyCode, event)
+        }
+        val normalizedAppUiKeyCode = NativeStreamInputRouter.normalizedAppUiKeyCode(event)
+        if (normalizedAppUiKeyCode != null && normalizedAppUiKeyCode != event.keyCode) {
+            return dispatchSyntheticStreamUiKey(normalizedAppUiKeyCode, event)
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        enterStreamPictureInPictureIfReady()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (startupDataReady) {
+            viewModel.setAndroidPictureInPictureActive(isInPictureInPictureMode)
+        }
+        NativeStreamInputRouter.releaseInputForLifecycle("picture-in-picture-changed")
+    }
+
+    private fun isAndroidPictureInPictureActive(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode
+
+    override fun onStop() {
+        super.onStop()
+        // Backgrounding mid-tap gives us no UP or CANCEL, so without this the host keeps the mouse
+        // button held down. PiP does not stop the activity, hence the separate call above.
+        NativeStreamInputRouter.releaseInputForLifecycle("activity-stopped")
+    }
+
+    private fun KeyEvent.isAndroidVolumeKey(): Boolean =
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
+
+    private fun KeyEvent.shouldVirtualizeControllerUiNavigation(): Boolean {
+        if (!AndroidControllerInput.isControllerEvent(source, deviceId)) return false
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            -> true
+            else -> false
+        }
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        mascotActivity.onMotion(event)
+        // Consumed only while the VR menu is open; otherwise the game keeps all stick input.
+        if (VrSession.onMotionEvent(event)) return true
+        val mouseLikePointer = event.isMouseLikePointerEvent()
+        if (streamSystemUiActive && (mouseLikePointer || event.isControllerMotionEvent())) {
+            enforceStreamSystemUiFromInput()
+            if (mouseLikePointer) {
+                requestExternalMousePointerCaptureIfNeeded(event)
+            }
+        }
+        return NativeStreamInputRouter.dispatchMotion(event) ||
+            dispatchGamepadHatNavigation(event) ||
+            super.dispatchGenericMotionEvent(event)
+    }
+
+    private fun requestExternalMousePointerCaptureIfNeeded(event: MotionEvent) =
+        requestExternalMousePointerCaptureIfNeeded(source = event.source, deviceId = event.deviceId)
+
+    private fun requestExternalMousePointerCaptureIfNeeded(source: Int? = null, deviceId: Int? = null) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val decorView = window?.decorView ?: return
+        if (
+            !shouldRequestAndroidMousePointerCapture(
+                streamActive = streamSystemUiActive,
+                captureEnabled = NativeStreamInputRouter.isExternalMousePointerCaptureEnabled(),
+                windowFocused = decorView.hasWindowFocus(),
+                hasPointerCapture = AndroidPointerCapture.hasCapture(decorView),
+                mouseLikePointer = true,
+            ) || externalMousePointerCaptureRequestPending
+        ) {
+            return
+        }
+        fun hasExternalMouse(): Boolean = if (deviceId != null) {
+            isPhysicalMouseDevice(InputDevice.getDevice(deviceId))
+        } else {
+            connectedPhysicalKeyboardMouse().mouseConnected
+        }
+        if (!hasExternalMouse()) return
+        externalMousePointerCaptureRequestPending = true
+        val requestOrigin = if (source != null && deviceId != null) {
+            "source=$source device=$deviceId"
+        } else {
+            "window-focus"
+        }
+        decorView.post {
+            externalMousePointerCaptureRequestPending = false
+            if (!hasExternalMouse()) return@post
+            if (
+                !shouldRequestAndroidMousePointerCapture(
+                    streamActive = streamSystemUiActive,
+                    captureEnabled = NativeStreamInputRouter.isExternalMousePointerCaptureEnabled(),
+                    windowFocused = decorView.hasWindowFocus(),
+                    hasPointerCapture = AndroidPointerCapture.hasCapture(decorView),
+                    mouseLikePointer = true,
+                )
+            ) {
+                return@post
+            }
+            decorView.isFocusable = true
+            decorView.isFocusableInTouchMode = true
+            decorView.requestFocus()
+            // Compose/SurfaceView can move focus to a descendant after capture starts. Refresh the
+            // listener across the current tree so the focused child keeps forwarding deltas.
+            AndroidPointerCapture.installRecursively(decorView, ::dispatchCapturedStreamPointer)
+            runCatching { AndroidPointerCapture.request(decorView) }
+                .onSuccess {
+                    NativeInputDiagnostics.addRetained(
+                        key = "mouse.pointer-capture",
+                        message = "external mouse pointer capture requested origin=$requestOrigin",
+                    )
+                }
+                .onFailure { error ->
+                    NativeInputDiagnostics.addRetained(
+                        key = "mouse.pointer-capture",
+                        message = "external mouse pointer capture request failed origin=$requestOrigin error=${error.javaClass.simpleName}",
+                    )
+                }
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        mascotActivity.onTouch(event)
+        try {
+            val decorView = window?.decorView
+            if (streamSystemUiActive && event.isMouseLikePointerEvent()) {
+                enforceStreamSystemUiFromInput()
+                requestExternalMousePointerCaptureIfNeeded(event)
+            }
+            if (NativeStreamInputRouter.shouldConsumeUiTransitionTouchBeforeViews(event)) return true
+            if (decorView != null && NativeStreamInputRouter.dispatchExternalMouseTouch(event, decorView.width, decorView.height)) return true
+            if (decorView != null && NativeStreamInputRouter.shouldForwardTouchBeforeViews(event, decorView.width, decorView.height)) {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    NativeInputDiagnostics.retainTouchRoute("activity.forward-before-views") {
+                        "activity touch forwardBeforeViews size=${decorView.width}x${decorView.height}"
+                    }
+                }
+                val forwarded = NativeStreamInputRouter.dispatchTouch(event, decorView.width, decorView.height)
+                if (NativeStreamInputRouter.shouldCaptureTouchBeforeViews(event, decorView.width, decorView.height) && forwarded) {
+                    return true
+                }
+            }
+            val handled = super.dispatchTouchEvent(event)
+            if (handled) {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    NativeInputDiagnostics.retainTouchRoute("activity.consumed-by-view") {
+                        "activity touch consumedByView action=${event.actionMasked}"
+                    }
+                }
+                return true
+            }
+            return if (decorView != null) {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    NativeInputDiagnostics.retainTouchRoute("activity.fallback") {
+                        "activity touch fallback size=${decorView.width}x${decorView.height}"
+                    }
+                }
+                NativeStreamInputRouter.dispatchTouch(event, decorView.width, decorView.height)
+            } else {
+                false
+            }
+        } finally {
+            NativeStreamInputRouter.postDispatchTouch(event)
+        }
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) {
+            queueStatusNotifier.cancel()
+            // Keep the foreground service alive long enough for onTaskRemoved()
+            // to end the exact cloud session. Normal in-app exits already move
+            // stream state to idle and cancel the service through update().
+            if (!startupDataReady || !shouldKeepAndroidStreamAlive(viewModel.state.value)) {
+                streamKeepAliveNotifier.cancel()
+            }
+        }
+        super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        mascotActivity.updateFocused(hasFocus)
+        if (!hasFocus) {
+            // Pixel desktop and other freeform environments can intercept a shortcut after its
+            // DOWN event (for example Alt+Tab), so no matching UP reaches this window.
+            NativeStreamInputRouter.releaseInputForLifecycle("window-focus-lost")
+        } else if (streamSystemUiActive) {
+            applyStreamSystemUi(true, force = true)
+            applyStreamDisplayRefreshRate(streamDisplayRefreshActive, streamDisplayRefreshFps, force = true)
+            requestExternalMousePointerCaptureIfNeeded()
+        } else if (spaceUiSystemBarsHidden) {
+            applyStreamSystemBars(active = false)
+        }
+    }
+
+    override fun onPointerCaptureChanged(hasCapture: Boolean) {
+        super.onPointerCaptureChanged(hasCapture)
+        if (!streamSystemUiActive && !hasCapture) return
+        val decorView = window?.decorView
+        NativeInputDiagnostics.addRetained(
+            key = "mouse.pointer-capture-state",
+            message = "external mouse pointer capture changed granted=$hasCapture " +
+                "streamActive=$streamSystemUiActive " +
+                "enabled=${NativeStreamInputRouter.isExternalMousePointerCaptureEnabled()} " +
+                "windowFocused=${decorView?.hasWindowFocus() == true}",
+        )
+    }
+
+    fun enforceStreamSystemUiFromInput() {
+        if (!streamSystemUiActive) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastStreamSystemUiInputReapplyMs < STREAM_SYSTEM_UI_INPUT_REAPPLY_MS) return
+        lastStreamSystemUiInputReapplyMs = now
+        applyStreamSystemBars(active = true)
+    }
+
+    private fun applyStreamSystemUi(active: Boolean, force: Boolean = false) {
+        if (!force && streamSystemUiActive == active) {
+            applyStreamKeepAwake(active)
+            updateStreamSystemUiEnforcer(active)
+            return
+        }
+        streamSystemUiActive = active
+        applyStreamKeepAwake(active)
+        updateStreamSystemUiEnforcer(active)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val decorView = window.decorView
+            if (active) {
+                AndroidPointerCapture.installRecursively(decorView, ::dispatchCapturedStreamPointer)
+            } else {
+                AndroidPointerCapture.clearRecursively(decorView)
+            }
+            if (!active) {
+                runCatching { AndroidPointerCapture.release(decorView) }
+            }
+        }
+
+        applyStreamSystemBars(active)
+    }
+
+    /**
+     * Pointer capture is delivered to the focused view. The Activity retry path focuses and asks
+     * the decor view for capture, so that same view must own a forwarding listener; otherwise a
+     * Bluetooth mouse can be captured successfully while its events never reach the stream view.
+     */
+    private fun dispatchCapturedStreamPointer(event: MotionEvent): Boolean {
+        if (!shouldRouteCapturedAndroidMousePointer(streamSystemUiActive, event.isMouseLikePointerEvent())) {
+            return false
+        }
+        NativeInputDiagnostics.retainThrottled(
+            key = "mouse.captured-route",
+            minimumIntervalMs = 250L,
+        ) {
+            "captured mouse routed source=${event.source} device=${event.deviceId} " +
+                "relativeX=${event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)} " +
+                "relativeY=${event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)}"
+        }
+        enforceStreamSystemUiFromInput()
+        return NativeStreamInputRouter.dispatchMotion(event)
+    }
+
+    /** Reapplies only immersive bars; pointer-icon traversal and window flags are state changes. */
+    private fun applyStreamSystemBars(active: Boolean) {
+        val immersive = if (active) !streamPanelExpanded else spaceUiSystemBarsHidden
+        applyOpenNowSystemBars(window, immersive)
+    }
+
+    private fun updateStreamPictureInPicture(ready: Boolean, settings: StreamSettings) {
+        val aspectRatio = pictureInPictureAspectRatioFor(settings)
+        val shouldUpdateParams = streamPictureInPictureReady != ready ||
+            streamPictureInPictureAspectRatio != aspectRatio
+        streamPictureInPictureReady = ready
+        streamPictureInPictureAspectRatio = aspectRatio
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && shouldUpdateParams) {
+            runCatching {
+                setPictureInPictureParams(buildStreamPictureInPictureParams())
+            }.onFailure { error ->
+                Log.w(MAIN_ACTIVITY_LOG_TAG, "Unable to update stream picture-in-picture params", error)
+            }
+        }
+    }
+
+    private fun enterStreamPictureInPictureIfReady() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (!streamPictureInPictureReady || isInPictureInPictureMode) return
+        runCatching {
+            enterPictureInPictureMode(buildStreamPictureInPictureParams())
+        }.onFailure { error ->
+            Log.w(MAIN_ACTIVITY_LOG_TAG, "Unable to enter stream picture-in-picture", error)
+        }
+    }
+
+    // Both callers gate on SDK_INT >= O; the annotation is what lets lint see that.
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun buildStreamPictureInPictureParams(): PictureInPictureParams =
+        PictureInPictureParams.Builder()
+            .setAspectRatio(streamPictureInPictureAspectRatio)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setAutoEnterEnabled(streamPictureInPictureReady)
+                    setSeamlessResizeEnabled(true)
+                }
+            }
+            .build()
+
+    private fun pictureInPictureAspectRatioFor(settings: StreamSettings): Rational {
+        val (width, height) = streamResolutionPixels(settings)
+        if (width <= 0 || height <= 0) return Rational(16, 9)
+        val ratio = width.toFloat() / height.toFloat()
+        return if (ratio in MIN_PIP_ASPECT_RATIO..MAX_PIP_ASPECT_RATIO) {
+            Rational(width, height)
+        } else {
+            Rational(16, 9)
+        }
+    }
+
+    private fun applyStreamKeepAwake(active: Boolean) {
+        if (active) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun applyPhoneStreamOrientationLock(active: Boolean) {
+        phoneStreamOrientationLocked = active
+        val nextOrientation = openNowRequestedOrientation(defaultRequestedOrientation, active,
+            streamPanelExpanded, spaceUiOrientationLocked)
+        if (requestedOrientation != nextOrientation) requestedOrientation = nextOrientation
+    }
+
+    internal fun setStreamPanelExpanded(expanded: Boolean) {
+        if (streamPanelExpanded == expanded) return
+        streamPanelExpanded = expanded
+        applyPhoneStreamOrientationLock(phoneStreamOrientationLocked)
+        applyStreamSystemBars(streamSystemUiActive)
+    }
+
+    private fun updateStreamSystemUiEnforcer(active: Boolean) {
+        if (!active) {
+            streamSystemUiEnforcerJob?.cancel()
+            streamSystemUiEnforcerJob = null
+            return
+        }
+        if (streamSystemUiEnforcerJob?.isActive == true) return
+        streamSystemUiEnforcerJob = lifecycleScope.launch {
+            while (streamSystemUiActive) {
+                delay(STREAM_SYSTEM_UI_ENFORCE_INTERVAL_MS)
+                val navigationBarsVisible = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.navigationBars()) == true
+                } else {
+                    false
+                }
+                if (
+                    shouldPeriodicallyEnforceStreamSystemUi(
+                        streamActive = streamSystemUiActive,
+                        panelExpanded = streamPanelExpanded,
+                        navigationBarsVisible = navigationBarsVisible,
+                        pointerLockEnabled = NativeStreamInputRouter.isExternalMousePointerCaptureEnabled(),
+                    )
+                ) {
+                    // Keep the immersive fallback without repeatedly walking the complete View
+                    // hierarchy to reapply pointer icons or rewriting unchanged window flags.
+                    applyStreamSystemBars(active = true)
+                }
+            }
+        }
+    }
+
+    private fun applyStreamDisplayRefreshRate(active: Boolean, requestedFps: Int, force: Boolean = false) {
+        streamDisplayRefreshActive = active
+        streamDisplayRefreshFps = requestedFps
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            DisplayRefreshDiagnostics.update(
+                active = active,
+                requestedFps = requestedFps,
+                currentMode = null,
+                selectedMode = null,
+                supportedModes = emptyList(),
+                preferredModeId = 0,
+                preferredRefreshRate = 0f,
+                applied = false,
+            )
+            return
+        }
+
+        val display = window.decorView.display
+        val supportedModes = display?.supportedModes.orEmpty().map { it.toDisplayRefreshMode() }
+        val currentMode = display?.mode?.toDisplayRefreshMode()
+        val selectedMode = if (active) {
+            selectStreamDisplayMode(
+                supportedModes = supportedModes,
+                currentMode = currentMode,
+                requestedFps = requestedFps,
+            )
+        } else {
+            null
+        }
+        val preferredModeId = selectedMode?.id ?: 0
+        val preferredRefreshRate = selectedMode?.refreshRate ?: if (active) normalizedStreamDisplayFps(requestedFps) else 0f
+        val attributes = window.attributes
+        if (!force &&
+            attributes.preferredDisplayModeId == preferredModeId &&
+            kotlin.math.abs(attributes.preferredRefreshRate - preferredRefreshRate) < 0.01f
+        ) {
+            DisplayRefreshDiagnostics.update(
+                active = active,
+                requestedFps = requestedFps,
+                currentMode = currentMode,
+                selectedMode = selectedMode,
+                supportedModes = supportedModes,
+                preferredModeId = preferredModeId,
+                preferredRefreshRate = preferredRefreshRate,
+                applied = true,
+            )
+            return
+        }
+        var applied = false
+        var failure: Throwable? = null
+        runCatching {
+            window.attributes = attributes.apply {
+                preferredDisplayModeId = preferredModeId
+                this.preferredRefreshRate = preferredRefreshRate
+            }
+            applied = true
+        }.onFailure { error ->
+            failure = error
+            Log.w(MAIN_ACTIVITY_LOG_TAG, "Unable to apply stream display refresh preference", error)
+        }
+        DisplayRefreshDiagnostics.update(
+            active = active,
+            requestedFps = requestedFps,
+            currentMode = currentMode,
+            selectedMode = selectedMode,
+            supportedModes = supportedModes,
+            preferredModeId = preferredModeId,
+            preferredRefreshRate = preferredRefreshRate,
+            applied = applied,
+            error = failure,
+        )
+    }
+
+    private fun Display.Mode.toDisplayRefreshMode(): DisplayRefreshMode =
+        DisplayRefreshMode(
+            id = modeId,
+            refreshRate = refreshRate,
+            physicalWidth = physicalWidth,
+            physicalHeight = physicalHeight,
+        )
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 4210 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            queueStatusNotifier.update(viewModel.state.value)
+        }
+    }
+
+    private fun requestQueueNotificationPermissionIfNeeded(state: OpenNowUiState) {
+        if (notificationPermissionRequested) return
+        if (!shouldShowQueueLaunchStatus(state)) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4210)
+    }
+
+    private fun dispatchGamepadHatNavigation(event: MotionEvent): Boolean {
+        if (event.actionMasked != MotionEvent.ACTION_MOVE) return false
+        if ((event.source and InputDevice.SOURCE_JOYSTICK) != InputDevice.SOURCE_JOYSTICK) return false
+
+        val nextX = when {
+            event.getAxisValue(MotionEvent.AXIS_HAT_X) <= -0.5f -> KeyEvent.KEYCODE_DPAD_LEFT
+            event.getAxisValue(MotionEvent.AXIS_HAT_X) >= 0.5f -> KeyEvent.KEYCODE_DPAD_RIGHT
+            else -> null
+        }
+        val nextY = when {
+            event.getAxisValue(MotionEvent.AXIS_HAT_Y) <= -0.5f -> KeyEvent.KEYCODE_DPAD_UP
+            event.getAxisValue(MotionEvent.AXIS_HAT_Y) >= 0.5f -> KeyEvent.KEYCODE_DPAD_DOWN
+            else -> null
+        }
+
+        val handledX = updateSyntheticDpadKey(lastHatXKeyCode, nextX, event)
+        val handledY = updateSyntheticDpadKey(lastHatYKeyCode, nextY, event)
+        lastHatXKeyCode = nextX
+        lastHatYKeyCode = nextY
+        return handledX || handledY
+    }
+
+    private fun updateSyntheticDpadKey(previous: Int?, next: Int?, sourceEvent: MotionEvent): Boolean {
+        var handled = false
+        if (previous != null && previous != next) {
+            handled = dispatchSyntheticDpadKey(previous, KeyEvent.ACTION_UP, sourceEvent) || handled
+        }
+        if (next != null && previous != next) {
+            handled = dispatchSyntheticDpadKey(next, KeyEvent.ACTION_DOWN, sourceEvent) || handled
+        }
+        return handled
+    }
+
+    private fun dispatchSyntheticDpadKey(keyCode: Int, action: Int, sourceEvent: MotionEvent): Boolean {
+        val event = KeyEvent(
+            sourceEvent.downTime,
+            sourceEvent.eventTime,
+            action,
+            keyCode,
+            0,
+            sourceEvent.metaState,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            0,
+            0,
+            InputDevice.SOURCE_DPAD,
+        )
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun dispatchSyntheticStreamUiKey(keyCode: Int, sourceEvent: KeyEvent): Boolean {
+        val event = KeyEvent(
+            sourceEvent.downTime,
+            sourceEvent.eventTime,
+            sourceEvent.action,
+            keyCode,
+            sourceEvent.repeatCount,
+            sourceEvent.metaState,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            sourceEvent.scanCode,
+            sourceEvent.flags,
+            InputDevice.SOURCE_DPAD,
+        )
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun MotionEvent.isMouseLikePointerEvent(): Boolean {
+        val controllerSource =
+            AndroidControllerInput.hasControllerSource(source) ||
+                AndroidControllerInput.isControllerEvent(source, deviceId)
+        return (source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
+            (source and InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE ||
+            ((source and InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD && !controllerSource)
+    }
+
+    private fun MotionEvent.isControllerMotionEvent(): Boolean =
+        AndroidControllerInput.isControllerEvent(source, deviceId)
+
+    private fun KeyEvent.shouldReapplyStreamSystemUi(): Boolean =
+        keyCode == KeyEvent.KEYCODE_MENU ||
+            AndroidControllerInput.isControllerEvent(source, deviceId) ||
+            keyCode in KeyEvent.KEYCODE_BUTTON_A..KeyEvent.KEYCODE_BUTTON_MODE
+
+    private companion object {
+        private const val MAIN_ACTIVITY_LOG_TAG = "OpenNOWMainActivity"
+        private const val STREAM_SYSTEM_UI_ENFORCE_INTERVAL_MS = 500L
+        private const val STREAM_SYSTEM_UI_INPUT_REAPPLY_MS = 250L
+        private const val MIN_PIP_ASPECT_RATIO = 1f / 2.39f
+        private const val MAX_PIP_ASPECT_RATIO = 2.39f
+    }
+}
+
+internal fun shouldPeriodicallyEnforceStreamSystemUi(
+    streamActive: Boolean,
+    panelExpanded: Boolean = false,
+    navigationBarsVisible: Boolean,
+    pointerLockEnabled: Boolean,
+): Boolean = streamActive && !panelExpanded && (pointerLockEnabled || !navigationBarsVisible)
+
+internal fun shouldRouteCapturedAndroidMousePointer(
+    streamActive: Boolean,
+    mouseLikePointer: Boolean,
+): Boolean = streamActive && mouseLikePointer
+
+internal fun shouldRequestAndroidMousePointerCapture(
+    streamActive: Boolean,
+    captureEnabled: Boolean,
+    windowFocused: Boolean,
+    hasPointerCapture: Boolean,
+    mouseLikePointer: Boolean,
+): Boolean =
+    streamActive &&
+        captureEnabled &&
+        windowFocused &&
+        !hasPointerCapture &&
+        mouseLikePointer
