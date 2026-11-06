@@ -105,10 +105,15 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 | --- | --- | --- | --- |
 | `42186000233` | `02ce545` | 失败 | AAR job 成功；app job 在 `:app:compileDebugKotlin` 报 `'public' function exposes its 'internal' return type DecoderSurfaceTarget`，已修为 `internal object` |
 | `42187431788` | `1fc4bd7` | 成功 | 两个 job 全绿；日志含 `> Task :app:testDebugUnitTest` 与 `BUILD SUCCESSFUL in 7m 7s`；产物 `cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B |
+| `42189848032` | `fcdb892` | 成功 | 测试数量断言生效：`6 suites / 58 tests / 0 failures / 0 errors / 0 skipped` |
+| `42192555168` | `11a4d69` | 成功 | **进入 VR 闪退修复版**：AAR 与 APK 两层守卫确认 `libcardboard_sdk_jni.so` 已打进产物 |
 
-第二次成功日志**没有打印测试数量**，所以新增 `Assert VR JVM tests actually ran` 步骤：解析
-`app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0` 且 `failures/errors == 0`，
-否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
+> **真机提示**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
+> `libcardboard_sdk_jni.so` 直接闪退（`UnsatisfiedLinkError`）。**请务必使用
+> `42192555168` 及之后的 APK 复测**，详见第 6 节与计划书 12.1 节。
+
+测试数量断言解析 `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0`
+且 `failures/errors == 0`，否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
 
 要点：
 

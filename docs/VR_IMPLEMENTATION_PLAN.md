@@ -571,14 +571,15 @@ job 2: app (needs: cardboard-aar)
 | --- | --- | --- | --- |
 | `42186000233` | `02ce545` | **失败** | job 1 `build-cardboard-sdk-aar` 成功编出 AAR；job 2 在 `:app:compileDebugKotlin` 报 `VrVideoSurfaceRegistry.kt:29:9 'public' function exposes its 'internal' return type DecoderSurfaceTarget`。已按第 10 节修为 `internal object` |
 | `42187431788` | `1fc4bd7` | **成功** | 两个 job 均 `success`；日志含 `> Task :app:testDebugUnitTest`、`BUILD SUCCESSFUL in 7m 7s`、`'app/build/outputs/apk/debug/app-debug.apk' -> '../out/app-arm64-v8a-debug.apk'`；artifacts：`cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B，`expired=False` |
-| 见本文件最新提交后的 Actions 页面 | 本轮新增断言步骤的提交 | **待验证** | 结果以 GitHub Actions 页面为准，禁止凭推测填写 |
+| `42189848032` | `fcdb892` | **成功** | 新增的 `Assert VR JVM tests actually ran` 步骤输出 `VR JVM test suites: 6 \| tests: 58 \| failures: 0 \| errors: 0 \| skipped: 0`，并逐个列出 6 个 `TEST-com.opencloudgaming.opennow.vr.*.xml`；与源码 6 个测试文件 / 58 个 `@Test` 一致。3 个 artifacts 齐全 |
+| `42192555168` | `11a4d69` | **成功** | 闪退修复版。`Verify the Cardboard JNI bridge is in the AAR` 与 `... in the APK` 两个守卫均 `success`；AAR 385622 B、APK 47565082 B。人工解包 APK 确认 `lib/arm64-v8a/libcardboard_sdk_jni.so`（21800 B）存在且含 `Java_com_google_cardboard_sdk_Initialize_nativeInitialize` 等 JNI 符号 |
 
-> **重要限定**：run `42187431788` 的日志**没有打印测试数量**，只能证明
-> `:app:testDebugUnitTest` 任务被调用且整体构建成功，**不能据此断言「6 个测试类全部执行」**。
-> 因此本轮补了 `Assert VR JVM tests actually ran` 步骤：解析
+> **历史限定（保留以便追溯）**：run `42187431788` 的日志当时**没有打印测试数量**，只能证明
+> `:app:testDebugUnitTest` 被调用且整体构建成功，不能据此断言「6 个测试类全部执行」。
+> 因此补了 `Assert VR JVM tests actually ran`：解析
 > `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求至少一个 `<testsuite>`、
 > `tests > 0` 且 `failures/errors == 0`，否则 job 直接失败。
-> 这是「CI 绿了但测试没跑」这类幻觉的硬性防线；测试报告与 XML 也改为 `always()` 上传以便审计。
+> 该断言在 run `42189848032` 起生效，实测 58 个测试全部执行；测试报告与 XML 改为 `always()` 上传以便审计。
 
 > 已知非致命警告：`Node.js 20 is deprecated ... forced to run on Node.js 24`
 > （`actions/checkout@v4` 等），只是 warning，不影响结论。
@@ -631,11 +632,69 @@ grep -rh '@Test' android/app/src/test/java/com/opencloudgaming/opennow/vr | wc -
 ## 12. 已知限制（必须如实告知用户）
 
 1. CI 只能证明**可编译 + JVM 单测通过 + 能出 APK**。GFN 串流画面能否正确显示、手柄手感、纸盒畸变观感、不同手机陀螺仪表现，**均需真机验证**，本任务未验证。
-2. VR APK 目前只出 `arm64-v8a`；x86 模拟器跑不了 Cardboard 原生库。
-3. Cardboard SDK 的 manifest 要求 OpenGL ES 3.0；极老设备会被 Play 过滤。
-4. HDR 路径未针对 VR SurfaceTexture 单独验证；若 HDR 串流异常，走 SDR（VR 模式下 `directSdrEnabled` 已强制 true）。
+2. VR APK 目前只出 `arm64-v8a`；x86 模拟器跑不了 Cardboard 原生库，32 位 ARM 手机会 `INSTALL_FAILED_NO_MATCHING_ABIS`。
+3. `third_party/cardboard/sdk/qrcode/android/AndroidManifest.xml` 声明 `glEsVersion=0x00030000` 且 `required=true`（OpenGL ES 3.0）；极老设备会被 Play 过滤。Android 10 设备普遍满足。侧载不受 Play 过滤影响。
+4. **（2026-11-06 修正）** 第一版此处写「VR 模式下 `directSdrEnabled` 已强制 true」，是**幻觉**。`Streaming.kt` 实际为 `VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true`，而 `isActive` 定义为 `target != null`，`install()` 又没有任何调用方，因此它**恒为 false**，VR 目前不会改变 SDR/HDR 路径。该行为要等 P1 接入 `SurfaceTexture` 后才有意义。
 5. 视频宽高比需要在 P1 从 `onFrameResolutionChanged` 写入 `VrSession.videoAspect`；骨架暂用 16:9。
 6. 用户提供的 GitHub PAT 已在对话中明文出现，**工作结束后必须撤销并重新生成**；token 未写入任何仓库文件。
+
+### 12.1 真机实测事故复盘（2026-11-06，Android 10 / API 29）
+
+**现象**：用户安装 run `42189848032` 的 APK 后，点击右下角「进入 VR」按钮**直接闪退**。这是真机实测，不是推测。
+
+**根因链（逐层可核实）**：
+
+1. `VrModeHost` 的「进入 VR」→ `VrSession.toggle()` → `enabled = true`。
+2. `AndroidView(factory)` 构造 `VrTheaterView` → 继承 `CardboardView(context)`。
+3. `CardboardView.initialize()` → `new CardboardViewApi(context)`（`CardboardViewApi.java:174-176`）。
+4. → `Initialize.initialize(context)` → 触发 `Initialize.java:30-32` 静态块 `System.loadLibrary("cardboard_sdk_jni")`。
+5. 旧 APK 的 `lib/arm64-v8a/` 只有 6 个 `.so`，**没有 `libcardboard_sdk_jni.so`** → `UnsatisfiedLinkError` → 进程崩溃。
+
+**为什么会缺**：上游 `settings.gradle` 是 `include ':sdk', ':hellocardboard-android', ':paperscope'`，而 `libcardboard_sdk_jni.so` 由 **`paperscope/CMakeLists.txt:94 add_library(cardboard_sdk_jni SHARED ...)`** 产出，源码是 `java_api/src/main/jni/cardboard_jni.cc` + `sdk/jni_utils/android/jni_utils.cc`。本 fork vendor 时把 `settings.gradle` 收窄成只 `include ':sdk'`，把这个 JNI 库一起丢了。`sdk/CMakeLists.txt` 只产出 `GfxPluginCardboard`（Unity 插件名）；而且 `cardboard_api.lds` 用 `local: *` 隐藏全部 `Java_*` 符号，**所以既不能给现有库改名，也不能把 `cardboard_jni.cc` 塞进它**。
+
+**修复**：在 `third_party/cardboard/sdk/CMakeLists.txt` 末尾新增独立 SHARED target `cardboard_sdk_jni`，链接 `GfxPluginCardboard` 导出的 `Cardboard*` C API + `android/log/GLESv2`，并加 `-Wl,-z,max-page-size=16384`。Android 会通过 `DT_NEEDED` 同时加载两个库。
+
+**验证（run `42192555168`，commit `11a4d69`）**：
+
+- CI 新增 `Verify the Cardboard JNI bridge is in the AAR` 与 `Verify the Cardboard JNI bridge is in the APK` 两个守卫，均 `success`。
+- 解包 APK 确认 `lib/arm64-v8a/libcardboard_sdk_jni.so`（21800 B）存在，含 `Java_com_google_cardboard_sdk_Initialize_nativeInitialize`、`HeadTracker_nativeHeadTrackerCreate`、`LensDistortion_nativeLensDistortionCreate` 等 JNI 符号；`libGfxPluginCardboard.so` 保留。
+- **仍待真机复测**：CI 无设备，只能证明 `UnsatisfiedLinkError` 这条路径被消除，不能证明 GL shader 编译、陀螺仪初始化、纸盒渲染在真机上 100% 正常。
+
+> 教训：**CI 全绿 ≠ 真机能用**。编译期不检查 `System.loadLibrary()` 的字符串对应 `.so` 是否存在，必须显式断言产物内容。
+
+### 12.2 Android 10（API 29）静态兼容性核验
+
+| 项 | 实测值 / 依据 | 结论 |
+| --- | --- | --- |
+| 主工程 SDK 等级 | `compileSdk 37 / minSdk 24 / targetSdk 37`（`android/app/build.gradle.kts:34-42`） | API 29 ∈ [24, 37]，**安装层面允许**；`targetSdk` 高于设备 API 不阻止安装 |
+| vendored Cardboard SDK | `compileSdk 35 / minSdk 24 / targetSdk 35` | 上游原为 26，我们降到 24；29 ≥ 26，无兼容风险 |
+| 硬件要求 | 主 `AndroidManifest.xml` 全部 11 个 `uses-feature` 均为 `required="false"` | 无陀螺仪等硬件不会阻止安装 |
+| ABI | APK 只有 `lib/arm64-v8a/`（修复后 7 个 `.so`） | **必须 64 位 ARM 手机** |
+| 渲染 API | `CardboardGLSurfaceView` / `EglFactory`，`setEGLContextClientVersion(2)` | 运行时走 GLES2（需 API 16+），**不强制 Vulkan**；Android 10 支持 |
+| SDK 版本分支 | `CardboardViewApi.loadDeviceParams()` 在 `SDK_INT > P(28)` 走 scoped storage；`CardboardView` 在 `< TIRAMISU(33)` 用 `postFrameCallback` | API 29 命中受保护分支，SDK 有旧版兼容处理 |
+| 签名 | `android/keystore/debug.keystore`（2147 B，checked-in），`storePassword=android` | debug 签名固定，可侧载；后续覆盖安装不会 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` |
+| 高版本权限 | `ACCESS_LOCAL_NETWORK` / `POST_NOTIFICATIONS` / `FOREGROUND_SERVICE_*`（API 33+） | Android 10 忽略未知权限，不阻断安装；相关功能按系统版本降级 |
+| QR 扫码 | `play-services-vision:20.1.3` | 无 GMS 的设备扫码配置 viewer 会失败，不影响 VR 主体 |
+| **真机运行** | **未验证** | CI 仅有 ubuntu runner，无模拟器/设备；「能装、不闪退」仍需用户实测 |
+
+### 12.3 上游 2.3.8 与主界面口径（2026-11-06 用户补充，待确认后执行）
+
+**2.3.8 的真实来源**：不是 GitHub tag，而是应用内更新接口 `https://api.printedwaste.com/releases/opennow/latest` 返回的发布元数据：
+
+```
+versionCode=193  versionName=2.3.8  releaseNotes="- NVST Fixes"
+artifactUrl=https://api.printedwaste.com/release-files/opennow/app-release-1793852606582-51b5eae0.apk
+uploadedSize=93140139  sha256=13f4b6241cb5ef2fcc7fef8f9c48396e13e0c0eeebb194d4bdb7d10d08eea028
+```
+
+已核实无可合并的公开源码：`XYkadicloud/OpenNOW-Android` 只有 `android-native`(2.3.0/186) 与 `zh-only`(2.2.9/185)；`OpenCloudGaming/OpenNOW-Android` 只有 1 个 Initial commit；`OpenCloudGaming/OpenNOW` 的 `main` 无 `android/` 目录。**因此「把 versionName 改成 2.3.8」不算适配**，只是改数字。正确做法需要用户提供 2.3.8 源码位置（仓库/分支/压缩包），再以 diff 方式迁移 NVST 修复并重新套用本 fork 的 VR 接线；若只有 release APK，则只能反编译比对，成本高且不可靠。
+
+**主界面口径**：用户明确要求**主界面不要用其修改的电视版桌面，使用原版手机版界面**；电视版桌面**仅作为 VR 界面的视觉参考**。
+
+- 电视版桌面 = `ConsoleHomeScreen.kt`，当前唯一调用点在 `OpenNowScreens.kt:1173`。
+- 原版手机版基准 = 源仓库提交 `ef9b5ea^`（「add optional Switch-style home layout」之前），当时无 `SwitchHomeScreen.kt` / `ConsoleHomeScreen.kt`，主界面在 `OpenNowScreens.kt` 内。
+- 引入电视版的 `31e7a71` 改动 7 个文件（`ConsoleHomeScreen.kt` +530、`GameShortcuts.kt` +84、`OpenNowScreens.kt`、`OpenNowSettingsScreens.kt`、`OpenNowViewModel.kt`、`SwitchHomeScreen.kt` -265、`strings.xml`）。回退需三方 diff，避免丢失之后 5 个 commit 对同一文件的其他改动。
+- **执行前需用户确认**：「原版手机版」指 `ef9b5ea^` 的纯原版，还是保留 `d2ff516` 的 Switch-style home。
 
 ---
 
