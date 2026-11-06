@@ -44,6 +44,9 @@ object VrSession {
     /** Set by VrModeHost so the "scan Cardboard QR" menu row can reach the SDK view. */
     @Volatile var onScanQr: (() -> Unit)? = null
 
+    /** Called by Streaming.kt when the renderer is created so VR can hide/show the 2D stream surfaces. */
+    @Volatile var onVrActiveChange: ((Boolean) -> Unit)? = null
+
     private var store: VrSettingsStore? = null
     private val router = VrGamepadRouter()
 
@@ -57,6 +60,7 @@ object VrSession {
         if (_enabled.value == value) return
         _enabled.value = value
         router.vrEnabled = value
+        onVrActiveChange?.invoke(value)
         if (!value) {
             setMenuOpen(false)
             router.reset()

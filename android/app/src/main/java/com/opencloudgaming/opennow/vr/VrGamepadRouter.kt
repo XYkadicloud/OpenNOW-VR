@@ -40,17 +40,20 @@ class VrGamepadRouter {
     private val pressed = HashSet<Int>()
     private var comboFired = false
     private var lastAxisMs = Long.MIN_VALUE
+    private var lastKeyRepeatMs = Long.MIN_VALUE
 
     fun reset() {
         pressed.clear()
         comboFired = false
         lastAxisMs = Long.MIN_VALUE
+        lastKeyRepeatMs = Long.MIN_VALUE
     }
 
     fun onKey(keyCode: Int, action: Int, isGamepad: Boolean, timeMs: Long = 0L): VrCommand {
         if (!isGamepad) return VrCommand.PassThrough
         if (action == VrKeys.ACTION_UP) {
             pressed.remove(keyCode)
+            lastKeyRepeatMs = Long.MIN_VALUE
             if (!comboPressed()) comboFired = false
             return if (menuOpen) VrCommand.Consumed else VrCommand.PassThrough
         }
@@ -64,9 +67,22 @@ class VrGamepadRouter {
             }
             return VrCommand.Consumed
         }
-        // Ignore OS key-repeat: one menu action per physical press.
-        if (alreadyDown) return if (menuOpen) VrCommand.Consumed else VrCommand.PassThrough
+        // The OS repeats ACTION_DOWN while a key is held. Outside the menu that repeat must not be
+        // consumed (the game may use it), so the original pass-through behaviour is unchanged.
+        if (alreadyDown) {
+            if (!menuOpen) return VrCommand.PassThrough
+            // In the menu only the D-pad repeats: holding A/B/SELECT must never confirm or close
+            // repeatedly. Repeat cadence follows the user's "menu repeat" setting (>= 80 ms).
+            if (keyCode !in REPEATABLE_MENU_KEYS) return VrCommand.Consumed
+            val delay = repeatMs.coerceAtLeast(MIN_KEY_REPEAT_MS)
+            if (lastKeyRepeatMs != Long.MIN_VALUE && timeMs - lastKeyRepeatMs < delay) {
+                return VrCommand.Consumed
+            }
+            lastKeyRepeatMs = timeMs
+            return menuKey(keyCode)
+        }
 
+        lastKeyRepeatMs = Long.MIN_VALUE
         if (menuOpen) return menuKey(keyCode)
         if (vrEnabled && VrKeys.MENU_KEYS.contains(keyCode)) return VrCommand.ToggleMenu
         return VrCommand.PassThrough
@@ -111,5 +127,21 @@ class VrGamepadRouter {
 
     private fun comboPressed(): Boolean = VrKeys.VR_TOGGLE_COMBOS.any { (a, b) ->
         pressed.contains(a) && pressed.contains(b)
+    }
+
+    private companion object {
+        /**
+         * Only navigation directions repeat while held. A/B/SELECT must not: OS key-repeat would
+         * otherwise confirm a setting or close the panel dozens of times per second.
+         */
+        val REPEATABLE_MENU_KEYS = intArrayOf(
+            VrKeys.DPAD_UP,
+            VrKeys.DPAD_DOWN,
+            VrKeys.DPAD_LEFT,
+            VrKeys.DPAD_RIGHT,
+        )
+
+        /** Safety floor so a very small menuRepeatMs cannot turn into a CPU-bound spin. */
+        const val MIN_KEY_REPEAT_MS = 80L
     }
 }

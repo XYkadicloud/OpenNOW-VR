@@ -139,4 +139,44 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L1))
         assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_R1))
     }
+
+    /** Holding a D-pad direction must scroll the panel, not just move one row. */
+    @Test
+    fun heldDpadRepeatsNavigationAtTheConfiguredCadence() {
+        val r = VrGamepadRouter().also {
+            it.vrEnabled = true
+            it.menuOpen = true
+            it.repeatMs = 140L
+        }
+        assertEquals(VrCommand.MoveSelection(1), press(r, VrKeys.DPAD_DOWN, 1000L))
+        // The first OS repeat is accepted immediately...
+        assertEquals(VrCommand.MoveSelection(1), press(r, VrKeys.DPAD_DOWN, 1060L))
+        // ...then repeats are rate limited to menuRepeatMs.
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.DPAD_DOWN, 1100L))
+        assertEquals(VrCommand.MoveSelection(1), press(r, VrKeys.DPAD_DOWN, 1210L))
+    }
+
+    /** OS key-repeat on A/B/SELECT must never confirm or close the panel repeatedly. */
+    @Test
+    fun heldActionButtonsDoNotRepeatInTheMenu() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.Confirm, press(r, VrKeys.BUTTON_A, 1000L))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_A, 2000L))
+        assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_B, 3000L))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_B, 4000L))
+    }
+
+    @Test
+    fun keyRepeatHonoursTheSafetyFloor() {
+        val r = VrGamepadRouter().also {
+            it.vrEnabled = true
+            it.menuOpen = true
+            it.repeatMs = 10L
+        }
+        assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP, 1000L))
+        assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP, 1050L))
+        // 30 ms is below the 80 ms floor even though repeatMs says 10 ms.
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.DPAD_UP, 1080L))
+        assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP, 1140L))
+    }
 }
