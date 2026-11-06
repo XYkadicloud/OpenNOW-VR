@@ -551,13 +551,15 @@ job 2: app (needs: cardboard-aar)
   → download-artifact 到 android/app/libs/ 并重命名 cardboard-sdk.aar
   → (working-directory: android) echo "sdk.dir=$SDK" > local.properties
   → OPENNOW_ABIS=arm64-v8a ./gradlew --no-daemon --no-configuration-cache \
-        -Popennow.abis=arm64-v8a :app:testDebugUnitTest :app:assembleDebug
+        -Popennow.abis=arm64-v8a :app:assembleDebug \
+        :app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"
   → upload-artifact  app-arm64-v8a-debug.apk
 ```
 
 要点：
 
 - **必须用 `assembleDebug`**，不要用 `assembleRelease`（SDK release 会 minify，混淆公开 API）。
+- **JVM 单测限定 `--tests "com.opencloudgaming.opennow.vr.*"`**：上游另有 167 个测试类引用 `android.*` 框架类，既无 Robolectric 也无 `unitTests.returnDefaultValues`，上游 CI 从未执行过它们。全量跑会产生与本次改动无关的失败。
 - `-Popennow.abis=arm64-v8a` + `OPENNOW_ABIS=arm64-v8a` 同时给，前者控制 Gradle `abiFilters`，后者控制 Rust 只编一个 target，显著缩短 CI。
 - `--no-configuration-cache` 必须保留（`android/gradle.properties` 里 `org.gradle.configuration-cache=true`，与 `buildSrc` instrumentation 组合下易出问题，原有 `android-build.yml` 也这么做）。
 - `local.properties` 不入库（`.gitignore` 已含）。
@@ -578,6 +580,9 @@ job 2: app (needs: cardboard-aar)
 | `Method ... not mocked` 单测失败 | 纯逻辑层混入了 Android 类；改用 `VrKeys` 常量与 `VrMatrix4` |
 | `UnsatisfiedLinkError: cardboard_sdk_jni` | AAR 只含 arm64-v8a；APK 也必须 arm64（`-Popennow.abis=arm64-v8a`）。x86 模拟器不支持 |
 | `buildNvst` 超时 | 确认设置了 `OPENNOW_ABIS=arm64-v8a`，否则 Rust 会编 4 个 target |
+| `'public' function exposes its 'internal' return type DecoderSurfaceTarget` | `VrVideoSurfaceRegistry` 必须是 **`internal object`**，不能是 `public object`。这是首次 CI（run `42186000233`）真实的失败原因，已修 |
+| `No tests found for given includes` | `--tests` 的 pattern 写错；正确值是 `com.opencloudgaming.opennow.vr.*` |
+| 大量 `Method ... not mocked` | 误把上游 167 个测试也跑了；加 `--tests` 限定，见第 9 节 |
 
 ---
 

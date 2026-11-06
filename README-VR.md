@@ -92,7 +92,12 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 
 1. `build-cardboard-sdk-aar`：从 `third_party/cardboard/` 用独立 Gradle 工程编出 `sdk-debug.aar`。
 2. `vr-unit-tests-and-debug-apk`：把 AAR 下载到 `android/app/libs/cardboard-sdk.aar`，
-   跑 `:app:testDebugUnitTest :app:assembleDebug`，产出 `opennow-vr-debug-arm64-v8a` APK 工件。
+   跑 `:app:assembleDebug` 与 `:app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"`，
+   产出 `opennow-vr-debug-arm64-v8a` APK 工件。
+
+> **测试范围说明**：CI 只跑本 fork 新增的 6 个 VR 测试类。上游项目另外自带 167 个 JVM 测试，
+> 它们引用了 `android.*` 框架类却既没有 Robolectric、也没有 `unitTests.returnDefaultValues`，
+> 且上游 CI 从未执行过它们。把它们纳入会导致与本改动无关的失败，因此暂不启用。
 
 要点：
 

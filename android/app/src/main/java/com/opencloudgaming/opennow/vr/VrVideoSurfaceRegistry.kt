@@ -16,7 +16,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Lifecycle rule: install()/clear() may be called from any thread, but updateTexImage() and
  * getTransformMatrix() MUST be called on the GL thread that created the SurfaceTexture.
  */
-object VrVideoSurfaceRegistry {
+/**
+ * Module-internal on purpose: `target()` returns [DecoderSurfaceTarget], which is an `internal`
+ * class in the host app. A public object may not expose an internal type in its public signature
+ * (Kotlin compiler error "'public' function exposes its 'internal' return type"). All callers
+ * (Streaming.kt, VrSession, VrTheaterRenderer, VrTheaterView, VrModeHost) are in the same Gradle
+ * module, so `internal` visibility is sufficient.
+ */
+internal object VrVideoSurfaceRegistry {
     @Volatile private var target: DecoderSurfaceTarget? = null
     @Volatile private var surfaceTexture: SurfaceTexture? = null
     @Volatile private var surface: Surface? = null
