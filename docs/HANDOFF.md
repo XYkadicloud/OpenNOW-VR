@@ -321,10 +321,15 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42187431788` | `1fc4bd7` | 成功：改为 `internal object` + 限定测试包 |
 | `42189848032` | `fcdb892` | 成功：测试数量断言生效，`6 suites / 58 tests` |
 | `42192555168` | `11a4d69` | 成功：闪退修复版，AAR/APK 均含 `libcardboard_sdk_jni.so` |
-| `42194578267` | `4c67196` | 成功：docs-only push 回归验证 |
+| `42194578267` | `4c67196` | 成功：docs-only push 回归验证，两个 job 全绿 |
+| **`42198812193`** | **`1a489e9`** | **成功：本轮代码验证**。电视版 UI 移除 + 黑底/OES 渲染 + 低端机优化 + 64 测试；两个 job 全绿，AAR/APK 两道 JNI 守卫均 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 21304 B、`opennow-vr-debug-arm64-v8a` 47525871 B |
 
-> 本轮（电视版 UI 移除 + VR 渲染 + 性能优化 + 本文）提交后会产生**新的 run**，
-> 请在 Actions 页面查最新一条并补记到 `README-VR.md` 5.1 与计划书 9.1。
+**`42198812193` 的人工二进制核验（已执行，非推测）**：
+
+- 解包 `vr-unit-test-report` 的 6 个 XML：`6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`。
+- 解包 APK：`lib/arm64-v8a/libcardboard_sdk_jni.so`(21800 B) 与
+  `lib/arm64-v8a/libGfxPluginCardboard.so`(857144 B) 均存在。
+- 结论只到「可编译 + 单测通过 + 产物完整」为止；**shader、画面、串流切换、真机帧率仍未验证**。
 
 ---
 
@@ -376,8 +381,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 ## 11. 收尾检查清单
 
-- [ ] 最新 `vr-build` run 全绿，测试数 `64`、产物含两个 `.so`
-- [ ] 用户在 Android 10 真机按 3.3 复测并反馈
-- [ ] 把新 run ID 补进 `README-VR.md` 5.1 与计划书 9.1
+- [x] 代码 run `42198812193` 全绿，测试数 `64`、产物含两个 `.so`（已人工解包核验，见 8.4）
+- [x] run ID 已补进 `README-VR.md` 5.1、计划书 9.1、本文 8.4
+- [ ] 用户在 Android 10 真机按 3.3 复测并反馈（**唯一剩下的关键验证**）
 - [ ] 工作区 `git status` clean，仓库内无 PAT 字面串残留
 - [ ] 提醒用户撤销并重新生成 PAT

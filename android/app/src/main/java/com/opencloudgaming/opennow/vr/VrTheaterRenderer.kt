@@ -42,7 +42,7 @@ import javax.microedition.khronos.egl.EGLConfig
  *  produced by glClearColor() in onSurfaceCreated() plus the SDK's own clear. Do NOT add a clear
  *  to onDrawEye().
  *
- * LOW-END PERFORMANCE BUDGET (see docs/VR_IMPLEMENTATION_PLAN.md section 13)
+ * LOW-END PERFORMANCE BUDGET (see docs/HANDOFF.md section 9 and the plan's section 12.5)
  *  - Zero heap allocation per frame: reused matrices (multiplyInto / scaledRotationInto), reused
  *    direct FloatBuffers, reused Bitmap/Canvas/Paints, no string formatting or logging in onDrawEye.
  *    The Cardboard SDK's Eye matrices are already preallocated and returned by reference.

@@ -578,6 +578,7 @@ job 2: app (needs: cardboard-aar)
 | `42189848032` | `fcdb892` | **成功** | 新增的 `Assert VR JVM tests actually ran` 步骤输出 `VR JVM test suites: 6 \| tests: 58 \| failures: 0 \| errors: 0 \| skipped: 0`，并逐个列出 6 个 `TEST-com.opencloudgaming.opennow.vr.*.xml`；与源码 6 个测试文件 / 58 个 `@Test` 一致。3 个 artifacts 齐全 |
 | `42192555168` | `11a4d69` | **成功** | 闪退修复版。`Verify the Cardboard JNI bridge is in the AAR` 与 `... in the APK` 两个守卫均 `success`；AAR 385622 B、APK 47565082 B。人工解包 APK 确认 `lib/arm64-v8a/libcardboard_sdk_jni.so`（21800 B）存在且含 `Java_com_google_cardboard_sdk_Initialize_nativeInitialize` 等 JNI 符号 |
 | `42194578267` | `4c67196` | **成功** | docs-only push 触发的回归验证；`build-cardboard-sdk-aar` 与 `vr-unit-tests-and-debug-apk` 两 job 全绿，确认事故复盘文档提交未破坏构建链 |
+| `42198812193` | `1a489e9` | **成功** | 电视版 UI 移除 + 黑底/OES 2D 渲染 + 低端机零分配优化 + 新增 6 个测试。两 job 全绿；AAR/APK 两道 JNI 守卫 success；解包测试报告得 `6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认 `libcardboard_sdk_jni.so`(21800 B) 与 `libGfxPluginCardboard.so`(857144 B)；artifacts 385622 / 21304 / 47525871 B |
 
 > **真机实测（2026-11-06，用户反馈，优先级高于任何 CI 结论）**：run `42192555168` 之后的 APK
 > 点击「进入 VR」**不再闪退**，用户原话「其实能进入 VR 模式啊。当然那由于完全没有任何场景，
