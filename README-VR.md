@@ -26,7 +26,9 @@
 | --- | --- |
 | Cardboard SDK v1.36.0 源码 vendor + 必要补丁 | 已完成 |
 | 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机、**手机端设置规格表**） | 已完成，有 JVM 单测（7 文件 / 71 个 `@Test`） |
-| **手机 2D 端 VR 设置面板**（不进 VR 也能调） | 已实现，**真机未验证**；右下角「VR 设置」按钮 → 8 个滑块 + 3 个开关 + 恢复默认，即时保存 |
+| **VR 设置集成进原生设置页** | 已实现，**真机未验证**；`设置 → Interface → VR 模式`，用上游原生 `SettingSwitch`/`NumberSlider`；**已删除**常驻浮层「VR 设置」按钮 |
+| 景深 / 空间固定感、真实帧宽高比 | 已修复，**真机未验证**；view 矩阵改用 SDK 语义的逆旋转，幕布按真实解码帧比例重建 |
+| 无缝切回手机 / 软键盘 | 已实现，**真机未验证**；VR 内按系统 BACK 或手柄快捷键退出，串流不重连 |
 | Android 骨架层（VR 状态、Surface 注册、GL program、Renderer、CardboardView、Compose 覆盖层） | 已完成 |
 | 主工程接线（Gradle 依赖、MainActivity 输入与覆盖层、Streaming 解码 Surface hook、Manifest） | 已完成 |
 | `.github/workflows/vr-build.yml` 两阶段 CI（编 AAR → 单测 + 出 APK）+ AAR/APK 二进制守卫 | 已完成 |
@@ -69,10 +71,14 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 
 ## 4. 可调项
 
-**手机端入口**：主界面右下角「**VR 设置**」按钮，不需要进入 VR 就能改下面全部参数；
-改动通过 `VrSession.updateSettings()` 立即写入 `SharedPreferences` 并同步给 VR 渲染，
-杀掉 App 重开后仍然保留。VR 开启时该对话框也能打开（它是独立窗口，覆盖在 CardboardView 之上）。
-单目省电模式对低端机最有效，但纸盒 VR 请保持 `CARDBOARD` 双目。
+**设置入口**：`设置 → Interface → 「VR 模式（半 VR 影院）」`，与其它设置项完全一样的原生控件。
+不进入 VR 也能改全部参数；改动通过 `VrSession.updateSettings()` 立即写入 `SharedPreferences`
+并同步给 VR 渲染，杀掉 App 重开后仍然保留。**画面上不再有常驻的 VR 设置浮层按钮。**
+
+**进入 / 退出 VR**：2D 模式右下角有一个小「进入 VR」入口（也可用手柄快捷键）；
+VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手柄快捷键退出，
+串流不中断，退出后即可用手机软键盘打字。单目省电模式对低端机最有效，
+但纸盒 VR 请保持 `CARDBOARD` 双目。
 
 重点是第一项「串流窗口大小」，可以直接把画面放大。
 
@@ -160,6 +166,10 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 6. 上游 SDK 的 `minSdkVersion` 从 26 补丁到 24 以匹配主工程；低版本设备的运行时行为未真机验证。
 7. 若真机上 2D 面板中文上下颠倒，把 `VrTheaterRenderer.PANEL_FLIP_Y` 由 `0.0f` 改为 `1.0f`。
 8. 上游 2.3.8 来自应用内更新接口而非 GitHub tag，目前无可合并公开源码，适配受阻（见计划书 12.3）。
+9. **串流开始后才进入 VR（中途切换）暂不可用**：解码器类型在会话创建时一次性选定，
+   `SurfaceOrTextureVideoDecoder` 只支持 surface→texture 单向回退，VR 的 `SurfaceTexture`
+   此时没有解码器消费，只剩 2D 状态面板。**先进 VR 再开始串流**的路径可用。
+   完整成因与推荐修复方案见 `docs/HANDOFF.md` 8.5 与计划书 12.8；本机无法真机验证，故未擅自改动上游解码器。
 
 ---
 

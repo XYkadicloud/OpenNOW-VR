@@ -1,5 +1,7 @@
 package com.opencloudgaming.opennow
 
+// OpenNOW-VR: native settings section (no floating overlay button).
+import com.opencloudgaming.opennow.vr.VrSettingsSection
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -1705,6 +1707,11 @@ private fun SettingsContent(
                     }
                 }
             }
+    // OpenNOW-VR: VR controls live in the app's own settings screen, using the same native
+    // SettingSwitch / NumberSlider components as every other section. No overlay button.
+    CategorySettingsSection(selectedCategory, SettingsCategory.Interface, searchQuery, "VR 模式（半 VR 影院）", "vr", "cardboard", "headset", "theater", "screen scale", "window size", "flat", "stereo", "viewer", "gyroscope", "depth", "distance") {
+        VrSettingsSection()
+    }
     CategorySettingsSection(selectedCategory, SettingsCategory.Interface, searchQuery, stringResource(R.string.settings_section_sounds_sessions), "interface", "controller", "sounds", "button", "tone", "session counter", "session report", "quality summary", "intro", "music", "queue") {
                 SettingSwitch(
                     label = stringResource(R.string.settings_button_press_tones),

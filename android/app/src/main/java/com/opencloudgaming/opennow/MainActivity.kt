@@ -263,8 +263,17 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         mascotActivity.onKey(event)
-        // VR settings panel (physical gamepad only) gets first refusal. With VR off this returns
-        // false for every key except the L1+R1 / SELECT+START toggle combo.
+        // OpenNOW-VR: BACK exits VR without interrupting the stream, restoring the flat 2D UI and
+        // the soft keyboard. Consumed before the gamepad/stream routers so it cannot be swallowed.
+        if (VrSession.enabled.value &&
+            event.keyCode == KeyEvent.KEYCODE_BACK &&
+            event.action == KeyEvent.ACTION_DOWN
+        ) {
+            VrSession.setEnabled(false)
+            return true
+        }
+        // VR gamepad commands get first refusal. With VR off this returns false for every key
+        // except the L1+R1 / SELECT+START toggle combo.
         if (VrSession.onKeyEvent(event)) return true
         if (streamSystemUiActive && event.action == KeyEvent.ACTION_DOWN && event.shouldReapplyStreamSystemUi()) {
             enforceStreamSystemUiFromInput()

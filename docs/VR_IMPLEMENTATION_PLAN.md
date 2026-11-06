@@ -761,7 +761,7 @@ UI 全部换成原版的，只有 VR 模式可以参考那个我修改的那个 
 输入路由要重接、每帧多一次全 UI 合成，与低端机省性能冲突。本 fork 采用的正确解法是
 「解码 Surface 零拷贝直连平面 + 轻量 2D 面板」，不要未做 PoC 就照字面硬改。
 
-### 12.7 手机 2D 端 VR 设置面板（2026-11-06 用户追加，已实现，真机未验证）
+### 12.7 手机 2D 端 VR 设置面板（**历史记录；浮层实现已被 12.8 取代，仅供追溯**）
 
 用户原话：「麻烦你添加一下设置平面手机这边直接就能控制 VR 这边的具体设置什么的，然后呢还有就是确保一下能够使用」。
 
@@ -787,6 +787,43 @@ UI 全部换成原版的，只有 VR 模式可以参考那个我修改的那个 
 
 **待真机验证**：不进 VR 点「VR 设置」→ 拖「串流窗口大小」→ 再进 VR 幕布是否确实变大；
 杀掉 App 重开后设置是否保留；VR 开启时对话框能否正常覆盖显示。
+
+### 12.8 原生设置集成、景深修复与串流中途切换边界（2026-11-06 用户追加）
+
+用户本轮要点（原话摘取）：「把 VR 设置做到原本的设置里面，不是在屏幕画面上再叠加一个一直都会有的按钮」；
+「手机和 VR 模式无缝切换……需要键盘时退出 VR 用手机软键盘打字」；
+「最先做好的是串流具体的东西……串流的时候可以正确调用到 VR 界面，而且有着正确的景深」；
+「我没有让你在 VR 那边做软键盘」，帧率等只读信息「可以，不强求」。
+
+**已实现（代码完成，真机未验证）**
+
+1. **设置页原生化**：新增 `vr/VrSettingsSection.kt`，在 `OpenNowSettingsScreens.kt` 的
+   `SettingsCategory.Interface` 下挂一个 `CategorySettingsSection`，复用上游原生
+   `SettingSwitch` / `NumberSlider`（含搜索关键词、手柄导航样式）。
+   **删除** `VrPhoneSettings.kt` 浮层对话框，`VrModeHost` 去掉常驻「VR 设置」按钮；
+   VR 开启时画面上**没有任何浮层控件**，仅在 2D 模式保留一个「进入 VR」入口。
+2. **景深 / 空间固定感**：核实 `HeadTransform.getHeadView()` 是**逆旋转**（camera-to-head，
+   见 `HeadTransform.java:76` 注释），`Eye.applyHeadView()` 计算 `eyeFromHead * headView`。
+   旧代码误把四元数**正向**旋转当 view 矩阵，导致幕布跟着头转、缺乏空间深度。
+   新增 `VrMatrix4.transposeRotationInto()` 与 `VrHeadPose.viewRotationInto()`，
+   renderer 改用后者；新增 4 个 JVM 测试验证 R·Rᵀ = I 与 aliased 输出。
+3. **幕布宽高比**：`Streaming.kt.onFrameResolutionChanged` 调 `VrSession.setVideoAspect(w,h)`，
+   渲染器检测 aspect 变化自动重建网格，幕布不再固定 16:9（这是透视正确的必要条件）。
+4. **无缝退出**：`MainActivity.dispatchKeyEvent` 在 VR 开启时用系统 **BACK** 退出
+   （消费事件前于手柄/串流路由），`VrVideoSurfaceRegistry.clear()` 让解码器回退 2D surface，
+   不重连会话；退出后 2D UI 与手机软键盘恢复。手柄快捷键 `ToggleVrMode` 仍可用。
+
+**已核实但未修复（完整方案见 `HANDOFF.md` 8.5，勿假装已完成）**
+
+`StreamCodec.kt:471` 的 `if (!directSdrEnabled()) return textureDecoder` 在会话创建时一次性
+选定解码器类型，`SurfaceOrTextureVideoDecoder` 只有 surface→texture 单向回退。因此
+**串流开始后才进 VR** 时，VR 的 `SurfaceTexture` 没有解码器消费，只剩 2D 状态面板；
+**先进 VR 再开始串流** 的路径可用。修复需要给包装类加 `switchToSurface()` 双向切换，
+并处理关键帧恢复与 HDR/锐化/录制的保护条件——本机无法真机验证，故只写定方案，不擅自改动。
+VR 内显示帧率属于可选增强，未实现（位置：`VrTheaterRenderer.uploadPanel()`）。
+
+**主界面**：用户本轮再次确认「主界面的确你这边做一下」——电视版 UI 已在 12.4 完全移除、
+Home 恒为原版 `HomeScreen`，此项**已完成且无残留引用**。
 
 ---
 

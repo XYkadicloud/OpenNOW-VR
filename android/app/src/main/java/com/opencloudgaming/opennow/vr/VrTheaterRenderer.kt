@@ -166,8 +166,11 @@ class VrTheaterRenderer : CardboardView.Renderer {
         val handles = (if (useVideo) video else panel) ?: return
         if (vertexCount == 0) return
 
+        // Use the INVERSE head rotation for the view matrix, matching the SDK's
+        // HeadTransform.getHeadView() / Eye.applyHeadView(). The forward rotation would make the
+        // screen follow the head (no spatial depth); the inverse keeps it anchored in the world.
         val head = if (current.headTrackingEnabled) {
-            VrHeadPose.scaledRotationInto(headRotation, headQuaternion, current.headTrackingSensitivity)
+            VrHeadPose.viewRotationInto(headRotation, headQuaternion, current.headTrackingSensitivity)
         } else {
             identityMatrix
         }

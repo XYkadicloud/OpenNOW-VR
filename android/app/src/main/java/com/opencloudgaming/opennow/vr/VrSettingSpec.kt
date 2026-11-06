@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
 /**
  * Machine-readable description of every numeric VR setting exposed by the PHONE-SIDE (2D) panel.
  *
- * Pure Kotlin on purpose: [VrPhoneSettingsDialog] renders its sliders from this list, and JVM unit
+ * Pure Kotlin on purpose: [VrSettingsSection] renders its sliders from this list, and JVM unit
  * tests verify ranges, step quantisation and read/write round-trips without any Android framework
  * stubs. Bounds come from [VrRanges], so the UI, storage and tests cannot drift apart.
  *

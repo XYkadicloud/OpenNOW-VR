@@ -43,6 +43,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import com.opencloudgaming.opennow.vr.VrSession
 import com.opencloudgaming.opennow.vr.VrVideoSurfaceRegistry
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -703,6 +704,9 @@ class NativeStreamClient(
                     NativeInputDiagnostics.add(resolutionMessage)
                     if (videoWidth > 0 && videoHeight > 0) {
                         NativeStreamInputRouter.setDecodedStreamResolution(videoWidth, videoHeight)
+                        // VR theatre screen must match the real decoded frame aspect, otherwise
+                        // the flat 2D quad is stretched and its perspective looks wrong.
+                        VrSession.setVideoAspect(videoWidth, videoHeight)
                     }
                     if (transition?.isInitial == false) {
                         scope.launch {

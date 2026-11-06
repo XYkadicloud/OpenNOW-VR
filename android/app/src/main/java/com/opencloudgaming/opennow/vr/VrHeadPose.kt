@@ -22,6 +22,19 @@ object VrHeadPose {
     fun scaledRotation(quaternion: FloatArray, sensitivity: Float): FloatArray =
         scaledRotationInto(FloatArray(VrMatrix4.SIZE), quaternion, sensitivity)
 
+    /**
+     * Zero-allocation VIEW rotation = inverse of [scaledRotationInto].
+     *
+     * Cardboard's `HeadTransform.getHeadView()` is the camera-to-head (inverse) transform, and
+     * `CardboardView.Eye.applyHeadView()` computes `eyeFromHead * headView`. Using the FORWARD
+     * rotation as the view matrix makes the screen follow the head instead of staying fixed in
+     * space (no depth / "stuck to your face"). VrTheaterRenderer must use this function.
+     */
+    fun viewRotationInto(out: FloatArray, quaternion: FloatArray, sensitivity: Float): FloatArray {
+        scaledRotationInto(out, quaternion, sensitivity)
+        return VrMatrix4.transposeRotationInto(out, out)
+    }
+
     /** Zero-allocation variant. Writes the rotation into [out] and returns it. */
     fun scaledRotationInto(
         out: FloatArray,

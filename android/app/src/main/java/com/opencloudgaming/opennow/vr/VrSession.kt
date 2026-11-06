@@ -29,8 +29,17 @@ object VrSession {
     private val _selectedIndex = MutableStateFlow(0)
     val selectedIndex: StateFlow<Int> = _selectedIndex.asStateFlow()
 
-    /** Written by Streaming.kt's onFrameResolutionChanged in P1; 16:9 until then. */
+    /** Real decoder frame aspect, written by Streaming.kt.onFrameResolutionChanged. */
     @Volatile var videoAspect: Float = VrScreenGeometry.DEFAULT_ASPECT
+        private set
+
+    /** Guards against 0/NaN/rotated extremes; the renderer rebuilds its mesh when this changes. */
+    fun setVideoAspect(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        val aspect = width.toFloat() / height.toFloat()
+        if (aspect.isNaN() || aspect.isInfinite()) return
+        videoAspect = aspect.coerceIn(0.25f, 8f)
+    }
 
     /** Set by VrModeHost so the "scan Cardboard QR" menu row can reach the SDK view. */
     @Volatile var onScanQr: (() -> Unit)? = null

@@ -18,8 +18,9 @@
    CI 全绿但用户点「进入 VR」直接闪退。现在 AAR/APK 两层二进制守卫已加，仍要真机复测。
 4. **绝对不能做**：3D/SBS/左右眼不同内容、gaze/眼球/凝视/dwell/头部动作确认、
    把电视版 UI 放回主界面、把 2.3.8 只改个版本号冒充适配、在本机编译。
-5. **接手后最优先的三件事**：① 查最新 CI run 是否全绿；② 请用户在 Android 10 真机复测
-   新 APK；③ 按第 4 节补齐 P3 / 处理 P2 阻塞项。
+5. **接手后最优先的三件事**：① 查最新 CI run 是否全绿；② **按 8.5 节实现「串流中途切 VR」的
+   `switchToSurface()` 双向切换**（这是当前最实在的功能缺口），并在真机验证关键帧恢复；
+   ③ 请用户在 Android 10 真机复测画面 / 景深 / 软键盘，再按第 4 节补 P3 与处理 P2 阻塞项。
 
 ---
 
@@ -111,7 +112,8 @@ https://github.com/XYkadicloud/OpenNOW-VR
 | VR 背景 = **纯黑，不做 3D 场景** | 用户原话：「场景的话应该是不用做，直接做黑底，方便节省性能」 |
 | **低端机全套性能优化** | 用户原话：「说明一下要做好全套的性能优化哦。毕竟我也就一个低端机」 |
 | 窗口大小可调 | 用户特别强调「串流的窗口大小」可以放大，其余可调项由助手补充 |
-| **手机平面端直接控制 VR 设置** | 用户原话：「添加一下设置平面手机这边直接就能控制 VR 这边的具体设置」。**不进入 VR** 也要能改全部 VR 参数，且改动即时保存生效 |
+| **VR 设置必须在原生设置页里** | 用户原话：「把它做到原本的设置里面，不是在屏幕的画面上再叠加一个一直都会有的按钮」。入口为 `设置 → Interface → VR 模式`，用上游原生 `SettingSwitch`/`NumberSlider`；**严禁**再加浮层设置按钮。不进入 VR 也要能改全部参数，改动即时保存生效 |
+| **手机 / VR 无缝切换** | 用户原话：「串流的时候直接换成手机模式……需要键盘时退出 VR 用手机软键盘打字」。VR 内按系统返回键或手柄快捷键退出，串流不重连；**不要在 VR 里做软键盘** |
 | 目标设备 | Android 10（API 29），只出 `arm64-v8a`，必须 64 位 ARM |
 | 新仓库、公开 | 不要改原仓库 `OpenNOW-Android` |
 
@@ -160,7 +162,10 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | **电视版 UI 完全移除** | 完成 | `ConsoleHomeScreen.kt` 移到 `docs/ui-reference/*.txt`；`OpenNowScreens.kt` 的 `consoleHome` 分支、设置开关、`HomeUiState.load`、`console_home_*` 字符串全部删除；`grep` 编译路径零残留 |
 | **VR 黑底 + 2D 纹理正常渲染** | 代码完成，**真机未验证** | `vr/VrTheaterRenderer.kt`：黑底清屏色、OES 串流纹理、无流时 2D 面板 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
-| **手机 2D 端 VR 设置面板** | 代码完成，**真机未验证** | `vr/VrSettingSpec.kt` + `vr/VrPhoneSettings.kt` + `VrModeHost.kt` 的「VR 设置」按钮；8 个数值滑块 + 3 个开关 + 恢复默认；走 `VrSession.updateSettings()` 持久化；7 个新增 JVM 测试 |
+| **VR 设置集成进原生设置页** | 代码完成，**真机未验证** | `设置 → Interface → 「VR 模式（半 VR 影院）」`：`vr/VrSettingsSection.kt` 复用上游原生 `SettingSwitch` / `NumberSlider`。**已删除**常驻浮层「VR 设置」按钮与 `VrPhoneSettings.kt`（用户明确要求）。含 VR 总开关、8 个滑块、3 个开关、恢复默认 |
+| **景深 / 空间固定感修复** | 代码完成，**真机未验证** | 已核实 SDK `HeadTransform.getHeadView()` 是**逆旋转**（camera-to-head）。旧代码把四元数的**正向**旋转当 view 矩阵用，幕布会跟着头转、贴脸、无空间深度。现改 `VrHeadPose.viewRotationInto()`（转置 3x3 求逆）+ 2 个 JVM 测试 |
+| **幕布宽高比接真实帧** | 代码完成，**真机未验证** | `Streaming.kt.onFrameResolutionChanged` → `VrSession.setVideoAspect(w,h)`；渲染器检测到 aspect 变化自动重建幕布网格，不再固定 16:9 |
+| **无缝切回手机 / 软键盘** | 代码完成，**真机未验证** | VR 内按系统 **BACK** 或手柄快捷键退出；`VrVideoSurfaceRegistry.clear()` 让解码器回退 2D surface，不重连会话；退出后 2D UI 与软键盘恢复。VR 开启时画面上**没有任何浮层控件** |
 | Android 10 / API 29 静态兼容性核验 | 完成（静态） | 计划书 12.2；`minSdk 24 / targetSdk 37` |
 
 ### 3.2 已核实但未实现
@@ -168,6 +173,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | 项目 | 说明 |
 | --- | --- |
 | **P3：VR 内部、戴头显时用手柄操作的设置面板** | `VrMenuModel` / `VrGamepadRouter` / `VrSettingsStore` 已就绪，但**没有**把菜单画成 VR 内可见面板。注意区分：**手机 2D 端设置面板已完成**（见 3.1），这里指 VR 里那个用手柄调的面板。当前 VR 内 2D 面板只显示状态文字，不可交互 |
+| **串流开始后才进入 VR（中途切换）** | **受解码器架构限制，未实现无缝**，详见 **8.5**。已核实：先进 VR 再开始串流可用；串流中才进 VR 时，解码器仍是纯 texture 路径，VR 的 `SurfaceTexture` 收不到画面 |
 | 完整 2D UI 镜像进 VR | 见 2.2，用户「可以试一下」的可选项，未实现 |
 | 上游 2.3.8 适配 | 阻塞：见 4.2 |
 | 汉化 | 用户说「我其实只需要汉化就行」，语义未确认，**未执行**。不要擅自全量改文案 |
@@ -204,7 +210,8 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 
 1. **P3 可见设置面板**：把 `VrMenuModel` 渲染进 2D 面板纹理（Canvas 绘制），
    接 `VrGamepadRouter` 的上下/确认/返回，保持纯手柄、无 gaze。当前面板只是静态状态显示。
-   **注意**：手机 2D 端设置面板已完成（`VrPhoneSettings.kt`），这里说的是戴头显时在 VR 内部
+   **注意**：手机端的 VR 设置已完成，入口在**原生设置页**（`VrSettingsSection.kt`，见 12.8），
+   旧的 `VrPhoneSettings.kt` 浮层已按用户要求删除；这里说的是戴头显时在 VR 内部
    用手柄操作的那个面板，两者不要混为一谈。
 2. **串流中面板叠加**：串流时是否仍显示半透明设置面板，由用户确认后再做，不要自作主张。
 3. 真机发现文字方向 / OES 方向问题时，只改 `PANEL_FLIP_Y` 或 `uSTMatrix`，不要重写渲染器。
@@ -255,15 +262,17 @@ android/app/libs/cardboard-sdk.aar    CI 产物，.gitignore 排除
 android/app/src/main/AndroidManifest.xml
 android/app/src/main/java/com/opencloudgaming/opennow/
   MainActivity.kt                    ★VR overlay 接线（5 处）
-  Streaming.kt                       ★decoderSurface → VrVideoSurfaceRegistry
-  OpenNowScreens.kt                  ★主界面：Home 恒为原版 HomeScreen（电视版分支已删）
+  Streaming.kt                       ★decoderSurface → VrVideoSurfaceRegistry；onFrameResolutionChanged → VrSession.setVideoAspect
+  OpenNowScreens.kt                  ★主界面：Home 恒为原版 HomeScreen（电视版分支已删，用户已确认要做）
+  OpenNowSettingsScreens.kt          ★Interface 分类下挂 VrSettingsSection（VR 设置的原生入口）
   ConsoleHomeScreen.kt               ✗已从编译路径移除 → docs/ui-reference/*.txt
 android/app/src/main/java/com/opencloudgaming/opennow/vr/
   VrTheaterRenderer.kt               ★黑底 + OES 串流平面 + 2D 面板 + 零分配渲染循环
   VrTheaterView.kt                   CardboardView 子类；viewerMode → setStereoRenderMode
-  VrModeHost.kt                      ★Compose overlay + 「VR 设置」/「进入 VR / 退出 VR」两个按钮
-  VrPhoneSettings.kt                 ★手机 2D 端 VR 设置对话框（滑块 + 开关 + 恢复默认）
-  VrSettingSpec.kt                   ★纯 Kotlin 设置规格表（范围/步进/读写），UI 与 JVM 测试共用
+  VrModeHost.kt                      VR 渲染宿主；2D 时仅一个「进入 VR」小按钮，VR 开启后无任何浮层
+  VrSettingsSection.kt               ★原生设置页内的 VR 分区（上游 SettingSwitch / NumberSlider）
+  VrSettingSpec.kt                   纯 Kotlin 设置规格表（范围/步进/读写），UI 与 JVM 测试共用
+  （已删除）VrPhoneSettings.kt       原浮层设置对话框，按用户要求移除，勿重新引入
   VrSession.kt / VrSettings.kt       全局状态与可调项；updateSettings() = 校验 + 持久化 + 路由同步
   VrVideoSurfaceRegistry.kt          解码器 Surface ↔ GL 线程桥（internal object）
   VrMatrix4.kt / VrHeadPose.kt       纯 Kotlin 数学，含 *Into 零分配变体
@@ -364,6 +373,61 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 - 解包 APK：`lib/arm64-v8a/libcardboard_sdk_jni.so`(21800 B) 与
   `lib/arm64-v8a/libGfxPluginCardboard.so`(857144 B) 均存在。
 - 结论只到「可编译 + 单测通过 + 产物完整」为止；**shader、画面、串流切换、真机帧率仍未验证**。
+
+### 8.5 串流接入的真实边界与「中途切 VR」的正确修复方案（必读）
+
+**用户质疑**：「为什么你 VR 界面是直接把整个串流界面铺到 VR 界面下了，也有可能你根本没做」。
+核实结论如下，不要凭文档猜测：
+
+1. **VR 里显示的是解码后的视频帧，不是整个 App UI**。`Streaming.kt:660` 的
+   `decoderSurface = { VrVideoSurfaceRegistry.target() ?: renderer?.decoderTarget }` 让
+   `MediaCodec` 直接输出到 `VrTheaterRenderer` 创建的 `SurfaceTexture`；GL 用
+   `GL_TEXTURE_EXTERNAL_OES` 把这一帧贴到**唯一一块平面 quad**。手机 Compose UI 仍在底层
+   （被全屏 `CardboardView` 盖住），并没有被镜像进 VR。串流始终是平面 2D，无 SBS、无视差。
+2. **但用户的质疑戳中了一个真实缺陷**：`StreamCodec.kt:471`
+   `if (!directSdrEnabled()) return textureDecoder` 是在 **WebRTC 创建 decoder 时一次性决定**解码器类型；
+   `SurfaceOrTextureVideoDecoder` 只实现了 **surface → texture 单向**回退，没有 texture → surface。
+   于是：
+   - **先进 VR，再开始串流** → `directSdrEnabled` 当时为 true → 创建 surface decoder →
+     `MediaCodecSurfaceVideoDecoder.decode()` 每帧读 `surface()`，检测到
+     `target !== outputSurface` 会 `stopCodecLocked()` 并用新 Surface 重新 `configure()` →
+     **VR 能收到画面，且进/出 VR 都能在同一会话内切换 target**。这条路径可用。
+   - **先开始串流（VR 未开），串流中途才进 VR** → decoder 已是纯 `textureDecoder`，
+     `VrVideoSurfaceRegistry.target()` 虽然返回 VR 的 SurfaceTexture，**没有任何解码器消费它**，
+     VR 里只剩 2D 状态面板。**这条路径目前不可用**。
+3. **为什么本轮没有硬改解码器**：`directSdrEnabled` 恒 true 会绕过 `prefersDirectSdr` 的
+   `!hdr && !textureRequired` 保护，破坏 HDR、锐化、录制等上游功能；而
+   `SurfaceOrTextureVideoDecoder` 的 `switchToTexture()` 是「一次失败就永久回退」的设计。
+   本机无 Android 工具链、无法真机验证关键帧恢复与 WebRTC 状态机，**贸然改动违背「确认可用」**。
+   因此把完整方案写在这里，交给能在真机上验证的 Agent。
+
+**正确修复方案（按风险排序，推荐 A）**：
+
+- **A（真正无缝，需在真机验证）**：
+  1. `StreamCodec.kt`：`createDecoder` 在硬件 surface decoder 可用时**总是**创建
+     `SurfaceOrTextureVideoDecoder`（去掉 `if (!directSdrEnabled()) return textureDecoder` 的早退），
+     `useSurface` 保持**动态** lambda
+     `{ VrVideoSurfaceRegistry.isActive || renderer?.prefersDirectSdr == true }`。
+     `initDecode` 时 `usingTexture = !useSurface()`，所以普通 2D 会话行为不变，只是多一层包装。
+  2. `SurfaceOrTextureVideoDecoder.decode()`：新增反向分支
+     `if (usingTexture && useSurface() && surfaceFailure() == null) switchToSurface()`；
+     `switchToSurface()` = `textureDecoder.release()` → `surfaceDecoder.initDecode(settings, callback)`
+     → `active = surfaceDecoder; usingTexture = false`。
+  3. `MediaCodecSurfaceVideoDecoder.initDecode()` 会置 `needsKeyFrame = true`，切换后的**非关键帧**
+     应返回 `VideoCodecStatus.NO_OUTPUT`（不要 `ERROR`），等下一个关键帧自然恢复，避免 WebRTC
+     判定解码失败而重连。
+  4. **保护条件**：HDR、锐化、录制（`textureRequired`）时必须让 `useSurface` 为 false，
+     否则会破坏这些功能；`directSdrEnabled` 里已有 `settings.hdrEnabled` 可取。
+  5. 真机验证：串流中进 VR → 画面出现；按 BACK 退出 → 手机继续播放且软键盘可唤起；
+     HDR / 锐化 / 录制会话不受影响。
+- **B（零风险但不无缝）**：设置页的「VR 模式」开关在检测到当前会话是 texture decoder 时，
+  提示「需要重新开始串流才能在 VR 中看到画面」，或要求先开 VR 再开串流。
+- **C（不推荐）**：VR 侧镜像 2D SurfaceView 输出（VirtualDisplay / SurfaceControl），
+  需要系统权限或额外 render pass，与低端机省性能目标冲突。
+
+**另一个可选改进（用户明确说「可以，不强求」）**：VR 内显示帧率等只读信息。
+现成位置是 `VrTheaterRenderer.uploadPanel()` 的 Canvas 面板；加一个由 `onNewFrame` 统计的
+FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
 
 ---
 

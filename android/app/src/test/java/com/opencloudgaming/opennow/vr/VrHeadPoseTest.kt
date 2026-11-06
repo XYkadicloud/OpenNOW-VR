@@ -111,6 +111,23 @@ class VrHeadPoseTest {
     }
 
     @Test
+    fun viewRotationIsTheInverseOfScaledRotation() {
+        val q = quaternion(0.9f)
+        val view = VrHeadPose.viewRotationInto(FloatArray(VrMatrix4.SIZE), q, 1f)
+        val forward = VrHeadPose.scaledRotation(q, 1f)
+        assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.multiply(forward, view))
+        assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.multiply(view, forward))
+    }
+
+    @Test
+    fun viewRotationAtZeroSensitivityIsIdentity() {
+        assertEqualsMatrix(
+            VrMatrix4.identity(),
+            VrHeadPose.viewRotationInto(FloatArray(VrMatrix4.SIZE), quaternion(1.2f), 0f),
+        )
+    }
+
+    @Test
     fun scaledRotationIntoOverwritesStaleValuesOnIdentity() {
         val out = FloatArray(VrMatrix4.SIZE).also { it.fill(9f) }
         VrHeadPose.scaledRotationInto(out, floatArrayOf(0f, 0f, 0f, 1f), 1f)

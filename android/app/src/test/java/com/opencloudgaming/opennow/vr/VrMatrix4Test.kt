@@ -130,6 +130,23 @@ class VrMatrix4Test {
     }
 
     @Test
+    fun transposeRotationIntoIsTheInverseRotation() {
+        val r = VrMatrix4.rotation(0.3f, 0.8f, -0.5f, 0.9f)
+        val inverse = VrMatrix4.transposeRotationInto(FloatArray(VrMatrix4.SIZE), r)
+        assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.multiply(r, inverse))
+        assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.multiply(inverse, r))
+    }
+
+    @Test
+    fun transposeRotationIntoSupportsAliasedOutput() {
+        val r = VrMatrix4.rotation(1f, 0f, 0f, 0.4f)
+        val expected = VrMatrix4.transposeRotationInto(FloatArray(VrMatrix4.SIZE), r)
+        val aliased = r.copyOf()
+        VrMatrix4.transposeRotationInto(aliased, aliased)
+        assertEqualsMatrix(expected, aliased)
+    }
+
+    @Test
     fun identityIntoAndRotationIntoMatchAllocatingVariants() {
         val identityOut = FloatArray(VrMatrix4.SIZE).also { it.fill(7f) }
         assertEqualsMatrix(VrMatrix4.identity(), VrMatrix4.identityInto(identityOut))

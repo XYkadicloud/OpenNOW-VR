@@ -36,6 +36,22 @@ object VrMatrix4 {
         multiplyInto(FloatArray(SIZE), lhs, rhs)
 
     /**
+     * Zero-allocation transpose of the upper-left 3x3 block of a pure rotation matrix, i.e. its
+     * inverse (R^-1 == R^T for rotations). [out] may alias [src].
+     *
+     * Cardboard SDK's `HeadTransform.getHeadView()` is the inverse (camera-to-head) transform;
+     * VrHeadPose.viewRotationInto() uses this to build a correct view matrix.
+     */
+    fun transposeRotationInto(out: FloatArray, src: FloatArray): FloatArray {
+        require(out.size == SIZE && src.size == SIZE) { "4x4 matrices required" }
+        if (out !== src) src.copyInto(out)
+        val t01 = out[1]; out[1] = out[4]; out[4] = t01
+        val t02 = out[2]; out[2] = out[8]; out[8] = t02
+        val t12 = out[6]; out[6] = out[9]; out[9] = t12
+        return out
+    }
+
+    /**
      * Zero-allocation variant of [multiply]. [out] must not alias [lhs] or [rhs]: the product is
      * written element by element, so writing into an input would corrupt later reads.
      */
