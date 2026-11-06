@@ -36,7 +36,6 @@ class StreamVideoSurface(context: Context, private val hdr: Boolean, preferDirec
     private val surfaces = listOfNotNull(direct, sdr)
     @Volatile private var textureRequired = !preferDirectSdr
     @Volatile private var released = false
-    @Volatile private var vrActive = false
     internal val prefersDirectSdr: Boolean get() = !hdr && direct != null && !textureRequired && !released
     /** True once recording/sharpening forced EGL texture frames for this session. */
     internal val textureOutputRequired: Boolean get() = textureRequired
@@ -77,31 +76,12 @@ class StreamVideoSurface(context: Context, private val hdr: Boolean, preferDirec
         decoderTarget = null
         NativeInputDiagnostics.addRetained("surface-fallback", "video output switched to EGL textures reason=$reason")
         post {
-            if (!released && !vrActive) {
+            if (!released) {
                 direct?.visibility = GONE
                 sdr?.visibility = VISIBLE
                 requestLayout()
             }
         }
-    }
-
-    /**
-     * Called when VR is entered or left. A SurfaceView is composited by SurfaceFlinger, not by the
-     * Compose hierarchy, so a 2D stream layer can cover the Cardboard scene even though
-     * VrModeHost is drawn on top ("VR is just the full-screen 2D picture" on real devices).
-     * VR already owns the decoder Surface (VrVideoSurfaceRegistry), so hiding the phone layers
-     * costs no frames and removes one full-screen composited layer on the OPPO F9.
-     */
-    internal fun setVrActive(active: Boolean) {
-        if (released || vrActive == active) return
-        vrActive = active
-        if (active) {
-            surfaces.forEach { it.visibility = GONE }
-        } else {
-            surfaces.forEach { it.visibility = if (it === surfaceView) VISIBLE else GONE }
-            requestLayout()
-        }
-        NativeInputDiagnostics.addRetained("video-surfaces", "phone video surfaces vrActive=$active")
     }
 
     init {

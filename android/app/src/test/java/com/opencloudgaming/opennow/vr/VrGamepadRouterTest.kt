@@ -61,12 +61,20 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_B))
     }
 
-    /** SELECT/START must be a real toggle so a pad without a usable B button is not trapped. */
+    /** SELECT/START are also the exit-VR combo; inside the menu they must only close it. */
     @Test
     fun menuKeyClosesThePanelWhenItIsAlreadyOpen() {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_SELECT))
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_START))
+    }
+
+    /** The L1+R1 toggle combo is disabled while the menu is open (shoulders are fast-adjust there). */
+    @Test
+    fun shoulderComboDoesNotToggleVrWhileTheMenuIsOpen() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_L1))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_R1))
     }
 
     @Test

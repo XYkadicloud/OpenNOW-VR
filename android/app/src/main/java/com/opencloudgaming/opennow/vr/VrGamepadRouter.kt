@@ -60,7 +60,10 @@ class VrGamepadRouter {
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
 
         val alreadyDown = !pressed.add(keyCode)
-        if (comboPressed()) {
+        // While the menu is open every button belongs to the panel. SELECT/START are also part
+        // of the VR-toggle combo, so checking the combo here would exit VR (or swallow the key)
+        // when the user simply wants to close the panel. The combo stays active outside the menu.
+        if (!menuOpen && comboPressed()) {
             if (!comboFired) {
                 comboFired = true
                 return VrCommand.ToggleVrMode

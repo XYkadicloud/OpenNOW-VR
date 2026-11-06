@@ -9,26 +9,33 @@ import com.google.cardboard.sdk.CardboardView
  * Google Cardboard SDK view hosted inside MainActivity (NOT a separate Activity).
  * Keeping it in the same Activity preserves the existing NativeStreamInputRouter gamepad path.
  *
- * SURFACE LAYERING (why this class overrides so little):
- *  - The app's phone UI already contains `StreamVideoSurface`, whose children are SurfaceViews.
- *    SurfaceView layers are owned by SurfaceFlinger, not by the Compose hierarchy, so the 2D
- *    stream layer could stay above the Cardboard GL layer even though VrModeHost is drawn later.
- *    On the OPPO F9 that is exactly what happened: "VR" looked like the full-screen 2D stream.
- *  - The Cardboard GL surface is therefore promoted with `setZOrderOnTop(true)`. The VR scene is
- *    then authoritative and the 2D stream layer can never cover it.
- *  - `StreamVideoSurface.setVrActive(true)` additionally hides the phone's 2D surfaces, so they
- *    do not keep a full-screen composited layer (and a frozen frame) alive behind the VR scene.
+ * WHY setZOrderOnTop (the fix for "VR just shows the full-screen 2D picture"):
+ *  - The phone UI owns `StreamVideoSurface`, whose children are SurfaceViews. SurfaceView layers
+ *    are composited by SurfaceFlinger, NOT by the Compose/View draw order, so VrModeHost being
+ *    drawn *after* OpenNowApp does not put the Cardboard GL layer above the 2D stream layer.
+ *    On the OPPO F9 the 2D stream layer stayed on top and "VR" looked like the flat full-screen
+ *    stream instead of a black room with a 2D screen in it.
+ *  - Promoting the Cardboard GL SurfaceView with setZOrderOnTop(true) makes the VR scene
+ *    authoritative. setZOrderOnTop is most reliable before the surface is created, so it is
+ *    applied in init and again in onAttachedToWindow (both before GLSurfaceView.onResume()).
+ *  - The 2D stream SurfaceViews are deliberately LEFT ALIVE (not hidden/GONE). During VR the
+ *    decoder writes into the VR SurfaceTexture (VrVideoSurfaceRegistry), not into the 2D surfaces.
+ *    Hiding them would DESTROY their native Surface (surfaceDestroyed) and force a decoder
+ *    restart / black frame on exit. Keeping them attached makes phone <-> VR switching seamless.
+ *    VrModeHost removes this whole CardboardView when VR is off, revealing the 2D layer again.
+ *
+ * The SDK 2D touch overlay (alignment marker, X / gear buttons) is hidden: this project is
+ * gamepad-only, and setStereoRenderMode(true) calls showAll() on that overlay, so it is re-hidden
+ * after every settings change.
  */
 class VrTheaterView(context: Context) : CardboardView(context) {
     private val theaterRenderer = VrTheaterRenderer()
 
     init {
         setRenderer(theaterRenderer)
+        // Headset use has no touch input to reset the screen-off timer.
+        setKeepScreenOn(true)
         promoteGlSurface()
-        // Gamepad-only headset use means there is no touch to reset the screen timeout.
-        keepScreenOn = true
-        isFocusable = true
-        isFocusableInTouchMode = true
         applySettings(VrSession.settings.value)
     }
 
@@ -39,32 +46,20 @@ class VrTheaterView(context: Context) : CardboardView(context) {
         hideTouchOverlay()
     }
 
-    /**
-     * Put Cardboard's GL SurfaceView on top of the window and hide the SDK's 2D touch overlay
-     * (alignment marker, X and gear buttons), which is both unwanted for a gamepad-only design and
-     * is a full-screen composited layer per frame on the OPPO F9.
-     */
+    /** Only called while the GL surface does not exist yet (init / attach), never on recomposition. */
     private fun promoteGlSurface() {
         for (index in 0 until childCount) {
             val child = getChildAt(index)
-            if (child is SurfaceView) {
-                child.setZOrderOnTop(true)
-                child.keepScreenOn = true
-                child.isFocusable = true
-                child.isFocusableInTouchMode = true
-                child.requestFocus()
-            } else {
-                child.visibility = View.GONE
-            }
+            if (child is SurfaceView) child.setZOrderOnTop(true)
         }
     }
 
-    /**
-     * `setStereoRenderMode(true)` calls `showAll()` on the SDK layout, so the hidden container must
-     * be re-hidden after every settings change. Re-applying z-order is harmless and keeps the
-     * VR layer above the stream if the SDK ever re-creates its GL view.
-     */
-    private fun hideTouchOverlay() = promoteGlSurface()
+    private fun hideTouchOverlay() {
+        for (index in 0 until childCount) {
+            val child = getChildAt(index)
+            if (child !is SurfaceView) child.visibility = View.GONE
+        }
+    }
 
     fun start() = onResume()
 
@@ -75,7 +70,7 @@ class VrTheaterView(context: Context) : CardboardView(context) {
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         promoteGlSurface()
-        requestFocus()
+        hideTouchOverlay()
     }
 
     override fun onDetachedFromWindow() {

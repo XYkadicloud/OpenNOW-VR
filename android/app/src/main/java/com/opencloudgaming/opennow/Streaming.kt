@@ -691,9 +691,6 @@ class NativeStreamClient(
             renderer?.let { oldRenderer ->
                 releaseRendererInternal(oldRenderer)
             }
-            renderer = rendererView
-            // Notify VR when the renderer is ready so it can show/hide the 2D stream surfaces.
-            VrSession.onVrActiveChange = { active -> rendererView.setVrActive(active) }
             firstVideoFrameWatchdog.reset()
             val requestedResolution = streamResolutionPixels(settings)
             val displayMetrics = context.resources.displayMetrics
@@ -857,10 +854,6 @@ class NativeStreamClient(
     }
 
     private fun releaseRendererInternal(candidate: StreamVideoSurface) {
-        if (renderer === candidate) {
-            renderer = null
-            VrSession.onVrActiveChange = null
-        }
         prepareRendererForRelease(candidate)
         enqueueNativeLifecycleOperation("renderer-release") {
             candidate.release()
