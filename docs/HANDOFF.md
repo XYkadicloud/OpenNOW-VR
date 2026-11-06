@@ -313,7 +313,14 @@ BASIC=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
 git -c credential.helper= -c http.extraheader="AUTHORIZATION: basic $BASIC" push origin main
 ```
 
-push 到 `main` 会自动触发 `vr-build`。**每次代码改动都要跑一次并记录 run ID。**
+push 到 `main` 会自动触发 `vr-build`（`on: push`），**不是手动点编译**。每次代码改动都要跑一次并记录 run ID。
+
+> **提交纪律（用户 2026-11-06 指出「为什么隔一段就编译一次」后的改进，务必遵守）**：
+> 一次完整构建约 8–10 分钟。本轮有 2 次**纯文档提交**也触发了全量双阶段构建，属于浪费。
+> 后续请：① 把「补记上一个 run ID」「修注释/文案」与下一次**代码改动合并**成一次提交；
+> ② 确实只改文档时，commit message 里带 `[skip ci]`（GitHub Actions 会跳过 push 触发的工作流）；
+> ③ 不要为了「记录 run ID」单独再 push 一次。
+> 本次交接的最后一次文档提交已按此规则使用 `[skip ci]`，代码验证结论以 `42202834080` 为准。
 
 ### 8.2 查 CI
 
@@ -344,6 +351,12 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42194578267` | `4c67196` | 成功：docs-only push 回归验证，两个 job 全绿 |
 | **`42198812193`** | **`1a489e9`** | **成功：主代码验证**。电视版 UI 移除 + 黑底/OES 渲染 + 低端机优化 + 64 测试；两个 job 全绿，AAR/APK 两道 JNI 守卫均 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 21304 B、`opennow-vr-debug-arm64-v8a` 47525871 B |
 | `42200369358` | `bd0f6b4` | 成功：docs + KDoc 注释改动的回归；两个 job 全绿 |
+| **`42202834080`** | **`e365e03`** | **成功：最终代码验证（本次交接的版本）**。手机 2D 端 VR 设置面板 + 7 个新增测试；两个 job 全绿、无失败步骤；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 23811 B、`opennow-vr-debug-arm64-v8a` 47548120 B |
+
+**`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
+`7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
+`lib/arm64-v8a/libcardboard_sdk_jni.so`(21800 B) 与 `lib/arm64-v8a/libGfxPluginCardboard.so` 均存在，
+共 7 个原生库。**这是本机可给出的最高验证级别；画面与真机行为仍未验证。**
 
 **`42198812193` 的人工二进制核验（已执行，非推测）**：
 
@@ -402,8 +415,9 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 ## 11. 收尾检查清单
 
-- [x] 代码 run `42198812193` 全绿，测试数 `64`、产物含两个 `.so`（已人工解包核验，见 8.4）
+- [x] **最终代码 run `42202834080` 全绿**，测试数 `71`、产物含两个 `.so`（已人工解包核验，见 8.4）
 - [x] run ID 已补进 `README-VR.md` 5.1、计划书 9.1、本文 8.4
+- [x] 提交纪律已写入 8.1（纯文档提交用 `[skip ci]`，不重复触发构建）
 - [ ] 用户在 Android 10 真机按 3.3 复测并反馈（**唯一剩下的关键验证**）
 - [ ] 工作区 `git status` clean，仓库内无 PAT 字面串残留
 - [ ] 提醒用户撤销并重新生成 PAT

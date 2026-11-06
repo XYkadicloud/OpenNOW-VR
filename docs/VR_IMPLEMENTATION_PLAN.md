@@ -580,6 +580,7 @@ job 2: app (needs: cardboard-aar)
 | `42194578267` | `4c67196` | **成功** | docs-only push 触发的回归验证；`build-cardboard-sdk-aar` 与 `vr-unit-tests-and-debug-apk` 两 job 全绿，确认事故复盘文档提交未破坏构建链 |
 | `42198812193` | `1a489e9` | **成功** | 电视版 UI 移除 + 黑底/OES 2D 渲染 + 低端机零分配优化 + 新增 6 个测试。两 job 全绿；AAR/APK 两道 JNI 守卫 success；解包测试报告得 `6 suites / 64 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认 `libcardboard_sdk_jni.so`(21800 B) 与 `libGfxPluginCardboard.so`(857144 B)；artifacts 385622 / 21304 / 47525871 B |
 | `42200369358` | `bd0f6b4` | **成功** | docs + KDoc 注释改动的回归；两个 job 全绿 |
+| `42202834080` | `e365e03` | **成功** | **最终代码验证（交接版本）**：手机 2D 端 VR 设置面板 + 7 个新增测试；两 job 全绿且无失败步骤；解包测试报告 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK 确认两个必需 `.so`；artifacts 385622 / 23811 / 47548120 B |
 
 > **真机实测（2026-11-06，用户反馈，优先级高于任何 CI 结论）**：run `42192555168` 之后的 APK
 > 点击「进入 VR」**不再闪退**，用户原话「其实能进入 VR 模式啊。当然那由于完全没有任何场景，
