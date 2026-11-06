@@ -151,3 +151,31 @@ set_property(
     APPEND
     PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cardboard_api.lds"
 )
+
+# === OpenNOW-VR fix: Java API JNI bridge ======================================
+# java_api/.../Initialize.java does System.loadLibrary("cardboard_sdk_jni"), but upstream
+# builds that library in the `paperscope` module (paperscope/CMakeLists.txt). This fork vendors
+# only :sdk, so without this target the AAR ships solely libGfxPluginCardboard.so and entering
+# VR crashes with UnsatisfiedLinkError. Keep it a SEPARATE shared library on purpose:
+# cardboard_api.lds applied to GfxPluginCardboard hides every Java_* JNI symbol via `local: *`.
+# Linking against GfxPluginCardboard exposes the exported Cardboard* C API (and adds the
+# matching DT_NEEDED entry so Android loads both libraries together).
+add_library(cardboard_sdk_jni SHARED
+    ../java_api/src/main/jni/cardboard_jni.cc
+    jni_utils/android/jni_utils.cc
+)
+
+target_include_directories(cardboard_sdk_jni PRIVATE
+    .
+    include
+)
+
+target_link_libraries(cardboard_sdk_jni PRIVATE
+    GfxPluginCardboard
+    ${ANDROID_LIB}
+    ${LOG_LIB}
+    ${GLESv2_LIB}
+)
+
+# 16 KB page-size support for modern Android devices.
+target_link_options(cardboard_sdk_jni PRIVATE "-Wl,-z,max-page-size=16384")

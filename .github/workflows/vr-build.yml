@@ -58,6 +58,28 @@ jobs:
           ./gradlew --no-daemon --no-configuration-cache :sdk:assembleDebug
           ls -la sdk/build/outputs/aar/
 
+      # Regression guard for the VR entry crash: Initialize.java loads "cardboard_sdk_jni".
+      # If that .so is missing from the AAR, tapping "enter VR" dies with UnsatisfiedLinkError
+      # on the device even though compilation and JVM tests are green.
+      - name: Verify the Cardboard JNI bridge is in the AAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          aars = sorted(glob.glob('sdk/build/outputs/aar/*.aar'))
+          print('AARs:', aars)
+          found = False
+          for path in aars:
+              with zipfile.ZipFile(path) as z:
+                  jni = sorted(n for n in z.namelist() if n.startswith('jni/') and n.endswith('.so'))
+              print(path, 'jni libs:', jni)
+              if any(n.endswith('/libcardboard_sdk_jni.so') for n in jni):
+                  found = True
+          if not found:
+              sys.exit('FAIL: libcardboard_sdk_jni.so missing from AAR - VR entry will crash')
+          PY
+
       - name: Upload the AAR
         uses: actions/upload-artifact@v4
         with:
@@ -177,6 +199,28 @@ jobs:
           mkdir -p ../out
           find app/build/outputs/apk -name '*.apk' -exec cp -v {} ../out/app-arm64-v8a-debug.apk \;
           ls -la ../out
+
+      # Same regression guard at the very end: verify the shipped APK really carries the JNI
+      # bridge, not just the intermediate AAR. This is the artifact the user sideloads.
+      - name: Verify the Cardboard JNI bridge is in the APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          apks = sorted(glob.glob('../out/*.apk'))
+          print('APKs:', apks)
+          if not apks:
+              sys.exit('FAIL: no APK produced')
+          for path in apks:
+              with zipfile.ZipFile(path) as z:
+                  libs = sorted(n for n in z.namelist() if n.startswith('lib/') and n.endswith('.so'))
+              print(path, 'native libs:', libs)
+              if 'lib/arm64-v8a/libcardboard_sdk_jni.so' not in libs:
+                  sys.exit('FAIL: lib/arm64-v8a/libcardboard_sdk_jni.so missing from APK')
+              if 'lib/arm64-v8a/libGfxPluginCardboard.so' not in libs:
+                  sys.exit('FAIL: lib/arm64-v8a/libGfxPluginCardboard.so missing from APK')
+          PY
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
