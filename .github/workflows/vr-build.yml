@@ -138,6 +138,38 @@ jobs:
             :app:assembleDebug \
             :app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"
 
+      # Guard against "CI is green but zero tests ran". Gradle writes one TEST-*.xml per
+      # test class under app/build/test-results/testDebugUnitTest/. This step fails the job
+      # unless at least one <testsuite> with tests > 0 exists and no failure/error is reported.
+      - name: Assert VR JVM tests actually ran
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+
+          files = sorted(glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml'))
+          suites = tests = failures = errors = skipped = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              # Gradle normally emits <testsuite> as the root; some versions wrap it in
+              # <testsuites>. Iterating makes the assertion robust to both shapes.
+              for suite in root.iter('testsuite'):
+                  suites += 1
+                  tests += int(suite.get('tests', 0))
+                  failures += int(suite.get('failures', 0))
+                  errors += int(suite.get('errors', 0))
+                  skipped += int(suite.get('skipped', 0))
+              print(' ', path)
+          print('VR JVM test suites: %d | tests: %d | failures: %d | errors: %d | skipped: %d'
+                % (suites, tests, failures, errors, skipped))
+          if not files or suites == 0 or tests == 0:
+              sys.exit('FAIL: no VR JVM tests executed - check the --tests filter and report path')
+          if failures or errors:
+              sys.exit('FAIL: VR JVM tests reported failures/errors')
+          PY
+
       - name: Collect the APK
         shell: bash
         run: |
@@ -153,10 +185,12 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
-      - name: Upload the unit test report on failure
-        if: failure()
+      - name: Upload the unit test report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vr-unit-test-report
-          path: android/app/build/reports/tests/testDebugUnitTest/
+          path: |
+            android/app/build/reports/tests/testDebugUnitTest/
+            android/app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore

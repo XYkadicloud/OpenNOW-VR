@@ -99,6 +99,17 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 > 它们引用了 `android.*` 框架类却既没有 Robolectric、也没有 `unitTests.returnDefaultValues`，
 > 且上游 CI 从未执行过它们。把它们纳入会导致与本改动无关的失败，因此暂不启用。
 
+### 5.1 真实 CI 运行记录
+
+| run ID | commit | 结论 | 依据 |
+| --- | --- | --- | --- |
+| `42186000233` | `02ce545` | 失败 | AAR job 成功；app job 在 `:app:compileDebugKotlin` 报 `'public' function exposes its 'internal' return type DecoderSurfaceTarget`，已修为 `internal object` |
+| `42187431788` | `1fc4bd7` | 成功 | 两个 job 全绿；日志含 `> Task :app:testDebugUnitTest` 与 `BUILD SUCCESSFUL in 7m 7s`；产物 `cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B |
+
+第二次成功日志**没有打印测试数量**，所以新增 `Assert VR JVM tests actually ran` 步骤：解析
+`app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0` 且 `failures/errors == 0`，
+否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
+
 要点：
 
 - **只能用 `assembleDebug` 编 SDK**：上游 `release` 开了 `minifyEnabled true`，会混淆公开 Java API。

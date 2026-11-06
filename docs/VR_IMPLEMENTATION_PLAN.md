@@ -308,7 +308,7 @@ OpenNOW-VR/
 │   ├── app/libs/cardboard-sdk.aar             # 【CI 生成】不入库，.gitignore 排除
 │   ├── app/src/main/AndroidManifest.xml       # 【已改】加陀螺仪 uses-feature
 │   └── app/src/main/java/com/opencloudgaming/opennow/
-│       ├── MainActivity.kt                    # 【已改】3 处接线
+│       ├── MainActivity.kt                    # 【已改】5 处接线（attach / Box / 2 个输入拦截 / import）
 │       ├── Streaming.kt                       # 【已改】2 处 decoderSurface hook
 │       └── vr/                                # 【新增】VR 模块
 │           ├── VrSettings.kt                  # 数据类 + 范围 + 存储（已实现）
@@ -564,6 +564,24 @@ job 2: app (needs: cardboard-aar)
 - `--no-configuration-cache` 必须保留（`android/gradle.properties` 里 `org.gradle.configuration-cache=true`，与 `buildSrc` instrumentation 组合下易出问题，原有 `android-build.yml` 也这么做）。
 - `local.properties` 不入库（`.gitignore` 已含）。
 - `android/app/libs/*.aar` 不入库，由 CI 下载；本地开发需先跑一次 job 1 或按 README 手动构建 AAR。
+
+### 9.1 真实 CI 运行记录（防幻觉：只记录实际用 API / 日志查过的 run）
+
+| run ID | 触发 commit | 结论 | 可核实的事实依据 |
+| --- | --- | --- | --- |
+| `42186000233` | `02ce545` | **失败** | job 1 `build-cardboard-sdk-aar` 成功编出 AAR；job 2 在 `:app:compileDebugKotlin` 报 `VrVideoSurfaceRegistry.kt:29:9 'public' function exposes its 'internal' return type DecoderSurfaceTarget`。已按第 10 节修为 `internal object` |
+| `42187431788` | `1fc4bd7` | **成功** | 两个 job 均 `success`；日志含 `> Task :app:testDebugUnitTest`、`BUILD SUCCESSFUL in 7m 7s`、`'app/build/outputs/apk/debug/app-debug.apk' -> '../out/app-arm64-v8a-debug.apk'`；artifacts：`cardboard-sdk-aar` 378245 B、`opennow-vr-debug-arm64-v8a` 47554069 B，`expired=False` |
+| 见本文件最新提交后的 Actions 页面 | 本轮新增断言步骤的提交 | **待验证** | 结果以 GitHub Actions 页面为准，禁止凭推测填写 |
+
+> **重要限定**：run `42187431788` 的日志**没有打印测试数量**，只能证明
+> `:app:testDebugUnitTest` 任务被调用且整体构建成功，**不能据此断言「6 个测试类全部执行」**。
+> 因此本轮补了 `Assert VR JVM tests actually ran` 步骤：解析
+> `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求至少一个 `<testsuite>`、
+> `tests > 0` 且 `failures/errors == 0`，否则 job 直接失败。
+> 这是「CI 绿了但测试没跑」这类幻觉的硬性防线；测试报告与 XML 也改为 `always()` 上传以便审计。
+
+> 已知非致命警告：`Node.js 20 is deprecated ... forced to run on Node.js 24`
+> （`actions/checkout@v4` 等），只是 warning，不影响结论。
 
 ---
 
