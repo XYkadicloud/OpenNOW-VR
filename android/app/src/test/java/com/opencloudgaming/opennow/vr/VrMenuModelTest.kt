@@ -8,7 +8,7 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(18, VrMenuModel.items.size)
+        assertEquals(19, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -86,6 +86,11 @@ class VrMenuModelTest {
             false,
             VrMenuModel.adjust(s.copy(horizontalMirror = true), VrMenuItemId.HORIZONTAL_MIRROR, 1)
                 .horizontalMirror,
+        )
+        assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip)
+        assertEquals(
+            false,
+            VrMenuModel.adjust(s.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip,
         )
         assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.CENTER_ALIGN_LINE, 1).showCenterAlignmentLine)
         assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.BACKGROUND, 1).backgroundEnabled)

@@ -143,6 +143,16 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     private val positionBuffer: FloatBuffer = newFloatBuffer(MAX_VERTICES * 3)
     private val texCoordBuffer: FloatBuffer = newFloatBuffer(MAX_VERTICES * 2)
+    // Video-only texture coordinates. The stream quad can be mirrored / flipped independently of
+    // the status panel, the menu and the 360° background — those keep sampling texCoordBuffer.
+    private val videoTexCoordBuffer: FloatBuffer = newFloatBuffer(MAX_VERTICES * 2)
+
+    // Fixed PHYSICAL-SCREEN centre alignment line: a 4-vertex quad in NDC, drawn in onFinishFrame()
+    // with an identity MVP. It is NOT part of the VR scene: no head rotation, no eye view matrix,
+    // no per-eye viewport and no distortion warp, so it stays pinned to the screen centre.
+    private val linePositionBuffer: FloatBuffer = newFloatBuffer(12)
+    private val lineTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
+    private var lineTextureId = 0
 
     fun applySettings(value: VrSettings) {
         val prev = settings
@@ -150,7 +160,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val geometryChanged = next.screenScale != prev.screenScale ||
             next.screenDistanceMeters != prev.screenDistanceMeters ||
             next.screenVerticalOffset != prev.screenVerticalOffset ||
-            next.curvature != prev.curvature
+            next.curvature != prev.curvature ||
+            next.horizontalMirror != prev.horizontalMirror ||
+            next.verticalFlip != prev.verticalFlip
         val panelChanged = next != prev
         settings = next
         // Geometry buffers are only touched on the GL thread (see onDrawEye); applySettings runs
@@ -190,6 +202,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         setupVideoTexture()
         rebuildMesh()
         buildBackgroundMesh()
+        createLineResources()
         meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
         uploadPanel()
@@ -331,19 +344,17 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glUniform1i(handles.texture, 0)
 
-if (useVideo) {
-        // Apply horizontal mirror if the setting is enabled.
-        // Negating stMatrix[0] (x-scale) mirrors the texture left-right.
-        // Pure Kotlin-side change — no GLSL shader modification required.
-        // onDrawEye runs once PER EYE, but stMatrix is recomputed each frame by onNewFrame.
-        // We restore the sign after uploading so BOTH eyes sample an identically mirrored
-        // texture (otherwise the right eye would be double-negated and stay un-mirrored).
-        val mirror = current.horizontalMirror
-        if (mirror) stMatrix[0] = -stMatrix[0]
-        GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
-        if (mirror) stMatrix[0] = -stMatrix[0]
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
+        if (useVideo) {
+            // Horizontal mirror / vertical flip live in the STREAM QUAD's texture coordinates
+            // (built in rebuildMesh), NOT in the status panel, the menu or the 360° sphere.
+            // Pure Kotlin geometry change: no GLSL shader source is touched, and the
+            // SurfaceTexture transform matrix is left completely intact. Mutating stMatrix[0]
+            // (the old approach) ignored crops/translations and pushed the picture off-centre.
+            GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
         } else {
+            // PANEL_FLIP_Y stays 0: panel/menu are ordinary GL_TEXTURE_2D bitmaps whose first row
+            // is already at t=0. Flipping them here would turn the base UI upside down.
             GLES20.glUniform1f(handles.flip, PANEL_FLIP_Y)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTextureId)
         }
@@ -351,15 +362,26 @@ if (useVideo) {
         positionBuffer.position(0)
         GLES20.glEnableVertexAttribArray(handles.position)
         GLES20.glVertexAttribPointer(handles.position, 3, GLES20.GL_FLOAT, false, 12, positionBuffer)
-        texCoordBuffer.position(0)
+        val quadTexCoords = if (useVideo) videoTexCoordBuffer else texCoordBuffer
+        quadTexCoords.position(0)
         GLES20.glEnableVertexAttribArray(handles.texCoord)
-        GLES20.glVertexAttribPointer(handles.texCoord, 2, GLES20.GL_FLOAT, false, 8, texCoordBuffer)
+        GLES20.glVertexAttribPointer(handles.texCoord, 2, GLES20.GL_FLOAT, false, 8, quadTexCoords)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, vertexCount)
         GLES20.glDisableVertexAttribArray(handles.position)
         GLES20.glDisableVertexAttribArray(handles.texCoord)
     }
 
-    override fun onFinishFrame(viewport: Viewport) = Unit
+    /**
+     * Called AFTER the Cardboard SDK has composited both (distorted) eye textures onto the DEFAULT
+     * framebuffer. That is the true 2D / physical-screen layer: drawing here yields ONE straight
+     * line at the exact screen centre, with no per-eye duplication, no distortion warp, and no
+     * head / eye / perspective transform. It reproduces the old Cardboard SDK ui_alignment_marker
+     * the user saw on the 2D-only screen, which a normal Compose View can no longer show because
+     * the VR GL SurfaceView is setZOrderOnTop(true).
+     */
+    override fun onFinishFrame(viewport: Viewport) {
+        drawScreenSpaceAlignmentLine(settings, viewport)
+    }
 
     override fun onSurfaceChanged(width: Int, height: Int) = Unit
 
@@ -372,6 +394,10 @@ if (useVideo) {
         bgTexCoordBuffer = null
         bgVertexCount = 0
         bgDirty = true
+        if (lineTextureId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(lineTextureId), 0)
+            lineTextureId = 0
+        }
         if (panelTextureId != 0) {
             GLES20.glDeleteTextures(1, intArrayOf(panelTextureId), 0)
             panelTextureId = 0
@@ -538,19 +564,10 @@ if (useVideo) {
         canvas.drawText("手柄 SELECT / START：打开设置", 28f, 344f, hint)
         canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
         canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
-
-        // Draw center alignment line (single vertical line at panel center, from bottom to middle)
-        if (s.showCenterAlignmentLine) {
-            val linePaint = Paint().apply {
-                color = Color.rgb(120, 165, 195)
-                style = Paint.Style.STROKE
-                strokeWidth = 2f
-            }
-            val centerX = PANEL_W / 2f
-            val bottomY = PANEL_H - 2f
-            val middleY = PANEL_H / 2f
-            canvas.drawLine(centerX, bottomY, centerX, middleY, linePaint)
-        }
+        // NOTE: the centre alignment line is deliberately NOT drawn on this panel Canvas. It used
+        // to live here, which made it part of the VR quad texture: one line per eye, warped with
+        // the perspective quad and moving with head rotation. It is now a fixed screen-space GL
+        // overlay drawn in onFinishFrame() — see drawScreenSpaceAlignmentLine().
     }
 
     private fun drawMenu(canvas: Canvas, s: VrSettings) {
@@ -603,7 +620,112 @@ if (useVideo) {
         texCoordBuffer.clear()
         texCoordBuffer.put(mesh.texCoords)
         texCoordBuffer.position(0)
+
+        // Stream-only orientation. VrScreenGeometry emits u in [0,1] and v in {0,1}. Because the
+        // SurfaceTexture transform matrix is affine, substituting u -> 1-u / v -> 1-v mirrors the
+        // FINAL sampled coordinate (including any crop/translation carried by uSTMatrix). That is
+        // exactly what the old stMatrix[0] negation failed to do. The status panel, the menu and
+        // the 360° sphere keep sampling texCoordBuffer and are therefore never flipped.
+        videoTexCoordBuffer.clear()
+        var t = 0
+        while (t < mesh.texCoords.size) {
+            val u = mesh.texCoords[t]
+            val v = mesh.texCoords[t + 1]
+            videoTexCoordBuffer.put(if (s.horizontalMirror) 1f - u else u)
+            videoTexCoordBuffer.put(if (s.verticalFlip) 1f - v else v)
+            t += 2
+        }
+        videoTexCoordBuffer.position(0)
         vertexCount = mesh.vertexCount
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Fixed screen-space centre alignment line (2D / physical-screen overlay).
+    //
+    // Drawn in onFinishFrame(), AFTER the SDK has composited both distorted eye textures onto the
+    // default framebuffer. That is the real 2D screen layer: ONE straight line at x=0 (the exact
+    // physical screen centre), y=-1..0 (bottom edge up to the middle). It is NOT in the VR scene,
+    // NOT per-eye, NOT warped by distortion, and NO head quaternion / eye view / perspective is
+    // applied — so it never moves with head rotation. This reproduces the old Cardboard SDK
+    // ui_alignment_marker the user saw on the 2D-only screen. It reuses the existing panel
+    // program + a 1x1 white texture: no shader source change, zero-copy video path untouched.
+    // -----------------------------------------------------------------------------------------
+    private fun createLineResources() {
+        // onSurfaceCreated can run again after a GL surface loss; drop the old texture first.
+        if (lineTextureId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(lineTextureId), 0)
+            lineTextureId = 0
+        }
+        val w = 0.003f   // ~2 px on a 1080p screen; thin hairline like the old SDK marker
+        // GL_TRIANGLE_STRIP: bottom-left, top-left, bottom-right, top-right, all in NDC.
+        linePositionBuffer.clear()
+        linePositionBuffer.put(
+            floatArrayOf(
+                -w, -1f, 0f,
+                -w, 0f, 0f,
+                w, -1f, 0f,
+                w, 0f, 0f,
+            ),
+        )
+        linePositionBuffer.position(0)
+        lineTexCoordBuffer.clear()
+        lineTexCoordBuffer.put(floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f))
+        lineTexCoordBuffer.position(0)
+
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        lineTextureId = ids[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lineTextureId)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        val pixel = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        // Pure white hairline, matching the original Cardboard SDK alignment marker the user saw
+        // in the old 2D-only screen (before the VR GL surface was promoted above the 2D UI layer).
+        pixel.setPixel(0, 0, Color.WHITE)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, pixel, 0)
+        pixel.recycle()
+    }
+
+    /**
+     * Draws ONE fixed alignment line on the physical-screen layer. Called from onFinishFrame(),
+     * after both eyes have been composited. Uses the panel program with an identity MVP — no head
+     * pose, no eye view, no perspective — hence it never moves with the head or the VR quad.
+     */
+    private fun drawScreenSpaceAlignmentLine(s: VrSettings, viewport: Viewport) {
+        if (!s.showCenterAlignmentLine) return
+        val prog = panel ?: return
+        if (lineTextureId == 0) return
+
+        // The SDK has already rendered both eyes into the default framebuffer. Reassert the
+        // binding + FULL screen viewport so the overlay does not inherit the last eye's half
+        // viewport, and make sure no depth/scissor state from the distortion pass clips it.
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glViewport(viewport.x, viewport.y, viewport.width, viewport.height)
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+
+        GLES20.glUseProgram(prog.program)
+        // Identity MVP => aPosition is already in NDC. x=0 is now the exact PHYSICAL screen
+        // centre and y=-1..0 runs from the bottom edge up to the middle: a single straight
+        // hairline, exactly like the old SDK 2D alignment marker.
+        GLES20.glUniformMatrix4fv(prog.mvp, 1, false, identityMatrix, 0)
+        GLES20.glUniform1f(prog.brightness, 1f)
+        GLES20.glUniform1f(prog.flip, 0f)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform1i(prog.texture, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lineTextureId)
+
+        linePositionBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(prog.position)
+        GLES20.glVertexAttribPointer(prog.position, 3, GLES20.GL_FLOAT, false, 12, linePositionBuffer)
+        lineTexCoordBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(prog.texCoord)
+        GLES20.glVertexAttribPointer(prog.texCoord, 2, GLES20.GL_FLOAT, false, 8, lineTexCoordBuffer)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(prog.position)
+        GLES20.glDisableVertexAttribArray(prog.texCoord)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -820,17 +942,23 @@ if (useVideo) {
         const val PANEL_W = 768
         const val PANEL_H = 432
         const val MENU_ASPECT = 16f / 9f
-        // 18 rows fit in two columns of 9; 34px rows keep the last baseline (368) clear of the
+        // 19 rows fit in two columns of 10; 30px rows keep the last baseline (366) clear of the
         // bottom hint (408) on the 432px-tall panel.
-        const val MENU_ROWS_PER_COLUMN = 9
-        const val MENU_ROW_HEIGHT = 34f
+        const val MENU_ROWS_PER_COLUMN = 10
+        const val MENU_ROW_HEIGHT = 30f
 
         /**
-         * VrScreenGeometry emits top v=0 / bottom v=1. GLUtils uploads the bitmap's first row at
-         * t=0, so the quad's top vertex (v=0) already samples the top of the panel: no flip needed.
-         * If a device reports upside-down text, change this single constant to 1.0f.
+         * Status panel / menu are ordinary GL_TEXTURE_2D bitmaps. VrScreenGeometry emits top v=0 /
+         * bottom v=1 and GLUtils uploads the bitmap's first row at t=0, so the quad's top vertex
+         * (v=0) already samples the top of the panel: NO flip is needed here.
+         *
+         * IMPORTANT: this uniform only exists in PANEL_FRAGMENT_SHADER. The stream uses
+         * VIDEO_FRAGMENT_SHADER (samplerExternalOES + uSTMatrix), which has NO uFlip at all, so
+         * this constant can NEVER fix a reversed stream. It was wrongly set to 1.0f in an earlier
+         * attempt — that flipped the base UI upside down while leaving the video untouched.
+         * Stream orientation is handled by the video quad texCoords in rebuildMesh() instead.
          */
-        const val PANEL_FLIP_Y = 1.0f
+        const val PANEL_FLIP_Y = 0.0f
 
         const val MAX_VERTICES = (VrScreenGeometry.DEFAULT_SEGMENTS + 1) * 2
 

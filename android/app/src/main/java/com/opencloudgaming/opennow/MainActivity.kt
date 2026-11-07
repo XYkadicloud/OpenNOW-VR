@@ -58,6 +58,8 @@ class MainActivity : ComponentActivity() {
     private var lastHatXKeyCode: Int? = null
     private var lastHatYKeyCode: Int? = null
     private var streamSystemUiActive = false
+    /** True while VR is on: forces landscape and hides status/navigation bars. */
+    private var vrFullscreenActive = false
     private var spaceUiSystemBarsHidden = false
     private var spaceUiAppearanceActive = false
     private var defaultLightStatusBars = false
@@ -129,6 +131,12 @@ class MainActivity : ComponentActivity() {
                 }
                 VrModeHost()
             }
+        }
+        // VR needs forced landscape + immersive fullscreen. The VR GL SurfaceView is promoted with
+        // setZOrderOnTop(true), so no 2D View can cover it: hiding the system bars is the only way
+        // to remove the status/navigation bar from the VR picture. Both are restored on VR exit.
+        lifecycleScope.launch {
+            VrSession.enabled.collect { active -> applyVrFullscreen(active) }
         }
         lifecycleScope.launch {
             openNowApplication.awaitStartupData()
@@ -230,7 +238,9 @@ class MainActivity : ComponentActivity() {
             landscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE,
             page = state.page,
         )
-        if (spaceUiSystemBarsHidden == hidden) return
+        // While VR owns the screen, always re-apply (the immersive bars must not be resurrected
+        // by an unrelated configuration change).
+        if (spaceUiSystemBarsHidden == hidden && !vrFullscreenActive) return
         spaceUiSystemBarsHidden = hidden
         applyStreamSystemBars(streamSystemUiActive)
     }
@@ -248,10 +258,10 @@ class MainActivity : ComponentActivity() {
         if (streamSystemUiActive) {
             applyStreamSystemUi(true, force = true)
             applyStreamDisplayRefreshRate(streamDisplayRefreshActive, streamDisplayRefreshFps, force = true)
-        } else if (spaceUiSystemBarsHidden) {
+        } else if (spaceUiSystemBarsHidden || vrFullscreenActive) {
             applyStreamSystemBars(active = false)
         }
-        if (phoneStreamOrientationLocked || spaceUiOrientationLocked) {
+        if (phoneStreamOrientationLocked || spaceUiOrientationLocked || vrFullscreenActive) {
             applyPhoneStreamOrientationLock(phoneStreamOrientationLocked)
         }
     }
@@ -502,7 +512,7 @@ class MainActivity : ComponentActivity() {
             applyStreamSystemUi(true, force = true)
             applyStreamDisplayRefreshRate(streamDisplayRefreshActive, streamDisplayRefreshFps, force = true)
             requestExternalMousePointerCaptureIfNeeded()
-        } else if (spaceUiSystemBarsHidden) {
+        } else if (spaceUiSystemBarsHidden || vrFullscreenActive) {
             applyStreamSystemBars(active = false)
         }
     }
@@ -577,7 +587,20 @@ class MainActivity : ComponentActivity() {
     /** Reapplies only immersive bars; pointer-icon traversal and window flags are state changes. */
     private fun applyStreamSystemBars(active: Boolean) {
         val immersive = if (active) !streamPanelExpanded else spaceUiSystemBarsHidden
-        applyOpenNowSystemBars(window, immersive)
+        // VR always owns the whole screen: the status bar / navigation bar must never appear on
+        // top of the Cardboard GL surface (which is setZOrderOnTop(true)).
+        applyOpenNowSystemBars(window, immersive || vrFullscreenActive)
+    }
+
+    /**
+     * Forces a landscape, fully immersive window while VR is rendering, and restores the previous
+     * orientation / system-bar behaviour as soon as VR exits. Driven by the VrSession.enabled flow.
+     */
+    private fun applyVrFullscreen(active: Boolean) {
+        if (vrFullscreenActive == active) return
+        vrFullscreenActive = active
+        applyPhoneStreamOrientationLock(phoneStreamOrientationLocked)
+        applyStreamSystemBars(streamSystemUiActive)
     }
 
     private fun updateStreamPictureInPicture(ready: Boolean, settings: StreamSettings) {
@@ -639,8 +662,13 @@ class MainActivity : ComponentActivity() {
 
     private fun applyPhoneStreamOrientationLock(active: Boolean) {
         phoneStreamOrientationLocked = active
-        val nextOrientation = openNowRequestedOrientation(defaultRequestedOrientation, active,
-            streamPanelExpanded, spaceUiOrientationLocked)
+        // VR takes priority over every other orientation rule: a headset is always landscape.
+        val nextOrientation = if (vrFullscreenActive) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            openNowRequestedOrientation(defaultRequestedOrientation, active,
+                streamPanelExpanded, spaceUiOrientationLocked)
+        }
         if (requestedOrientation != nextOrientation) requestedOrientation = nextOrientation
     }
 

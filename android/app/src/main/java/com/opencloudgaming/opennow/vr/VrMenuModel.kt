@@ -16,6 +16,7 @@ enum class VrMenuItemId {
     MENU_REPEAT,
     SHOW_STATUS,
     HORIZONTAL_MIRROR,
+    VERTICAL_FLIP,
     CENTER_ALIGN_LINE,
     BACKGROUND,
     BACKGROUND_BRIGHTNESS,
@@ -57,6 +58,7 @@ object VrMenuModel {
             VrRanges.REPEAT_MIN_MS.toFloat(), VrRanges.REPEAT_MAX_MS.toFloat(), VrRanges.REPEAT_STEP_MS.toFloat()),
         VrMenuItem(VrMenuItemId.SHOW_STATUS, "显示状态", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.HORIZONTAL_MIRROR, "串流左右镜像", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.VERTICAL_FLIP, "串流上下翻转", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.CENTER_ALIGN_LINE, "中心辅助线", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.BACKGROUND, "360° 背景图", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
@@ -80,6 +82,7 @@ object VrMenuModel {
         VrMenuItemId.MENU_REPEAT -> settings.menuRepeatMs.toFloat()
         VrMenuItemId.SHOW_STATUS -> if (settings.showStatus) 1f else 0f
         VrMenuItemId.HORIZONTAL_MIRROR -> if (settings.horizontalMirror) 1f else 0f
+        VrMenuItemId.VERTICAL_FLIP -> if (settings.verticalFlip) 1f else 0f
         VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) 1f else 0f
         VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) 1f else 0f
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> settings.backgroundBrightness
@@ -99,6 +102,7 @@ object VrMenuModel {
         VrMenuItemId.MENU_REPEAT -> "${settings.menuRepeatMs} ms"
         VrMenuItemId.SHOW_STATUS -> if (settings.showStatus) "开" else "关"
         VrMenuItemId.HORIZONTAL_MIRROR -> if (settings.horizontalMirror) "开" else "关"
+        VrMenuItemId.VERTICAL_FLIP -> if (settings.verticalFlip) "开" else "关"
         VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) "开" else "关"
         VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) "开" else "关"
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> String.format(Locale.US, "%.2f", settings.backgroundBrightness)
@@ -129,8 +133,8 @@ object VrMenuModel {
         VrMenuItemId.RESET_DEFAULTS -> VrSettings.DEFAULT
         VrMenuItemId.VIEWER_MODE -> toggle(settings, id)
         VrMenuItemId.HEAD_TRACKING, VrMenuItemId.SHOW_STATUS,
-        VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.CENTER_ALIGN_LINE,
-        VrMenuItemId.BACKGROUND -> toggle(settings, id)
+        VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.VERTICAL_FLIP,
+        VrMenuItemId.CENTER_ALIGN_LINE, VrMenuItemId.BACKGROUND -> toggle(settings, id)
         else -> settings
     }.sanitized()
 
@@ -145,6 +149,7 @@ object VrMenuModel {
         VrMenuItemId.HEAD_TRACKING -> settings.copy(headTrackingEnabled = !settings.headTrackingEnabled)
         VrMenuItemId.SHOW_STATUS -> settings.copy(showStatus = !settings.showStatus)
         VrMenuItemId.HORIZONTAL_MIRROR -> settings.copy(horizontalMirror = !settings.horizontalMirror)
+        VrMenuItemId.VERTICAL_FLIP -> settings.copy(verticalFlip = !settings.verticalFlip)
         VrMenuItemId.CENTER_ALIGN_LINE -> settings.copy(showCenterAlignmentLine = !settings.showCenterAlignmentLine)
         VrMenuItemId.BACKGROUND -> settings.copy(backgroundEnabled = !settings.backgroundEnabled)
         else -> settings

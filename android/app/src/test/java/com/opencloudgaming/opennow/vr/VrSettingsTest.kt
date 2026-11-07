@@ -57,4 +57,20 @@ class VrSettingsTest {
         assertEquals(false, s.showStatus)
         assertEquals(false, s.headTrackingEnabled)
     }
+
+    @Test
+    fun streamOrientationAndOverlayFlagsDefaultOffAndSurviveSanitize() {
+        val defaults = VrSettings.DEFAULT
+        assertEquals(false, defaults.horizontalMirror)
+        assertEquals(false, defaults.verticalFlip)
+        assertEquals(false, defaults.showCenterAlignmentLine)
+        val toggled = VrSettings(
+            horizontalMirror = true,
+            verticalFlip = true,
+            showCenterAlignmentLine = true,
+        ).sanitized()
+        assertEquals(true, toggled.horizontalMirror)
+        assertEquals(true, toggled.verticalFlip)
+        assertEquals(true, toggled.showCenterAlignmentLine)
+    }
 }

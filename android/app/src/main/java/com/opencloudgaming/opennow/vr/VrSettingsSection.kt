@@ -100,14 +100,21 @@ fun VrSettingsSection() {
         SettingSwitch(
             label = "串流画面左右镜像",
             checked = settings.horizontalMirror,
-            description = "串流画面左右颠倒时打开。纯设置项，随时可关回；不改渲染管线。",
+            description = "只翻转串流画面（左右），不影响状态面板、菜单和 360° 背景。随时可关回；不改 shader。",
         ) { checked ->
             VrSession.updateSettings(settings.copy(horizontalMirror = checked))
         }
         SettingSwitch(
+            label = "串流画面上下翻转",
+            checked = settings.verticalFlip,
+            description = "只翻转串流画面（上下），不影响状态面板、菜单和 360° 背景。与左右镜像可叠加（等于旋转 180°）。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(verticalFlip = checked))
+        }
+        SettingSwitch(
             label = "中心对齐辅助线",
             checked = settings.showCenterAlignmentLine,
-            description = "在幕布正中画一条从下到中心的竖线，用来确认左右眼是否正常立体显示。",
+            description = "屏幕正中央一条从底部到中心的竖线，固定在 2D 屏幕层，不跟随头转动、不贴在 VR 幕布上。用来确认左右眼是否正常立体显示。",
         ) { checked ->
             VrSession.updateSettings(settings.copy(showCenterAlignmentLine = checked))
         }
@@ -140,7 +147,8 @@ fun VrSettingsSection() {
             Text("恢复默认")
         }
         Text(
-            text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）；360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
+            text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）。若朝向不对，分别试开「左右镜像」和「上下翻转」，两项可叠加，默认都关、随时可恢复。" +
+                "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),
         )

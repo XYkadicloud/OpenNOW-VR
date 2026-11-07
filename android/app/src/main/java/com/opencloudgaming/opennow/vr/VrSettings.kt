@@ -60,12 +60,17 @@ data class VrSettings(
     val gamepadDeadZone: Float = 0.20f,
     val menuRepeatMs: Long = 140L,
     val showStatus: Boolean = true,
-    /** When true, draws a single vertical center-alignment line on the status panel
-     *  (used to confirm the eyes are rendering the screen stereoscopically). Adjustable. */
+    /** When true, draws ONE vertical center-alignment line as a FIXED SCREEN-SPACE overlay:
+     *  it is NOT part of the VR quad / panel texture, does NOT follow head rotation, and is drawn
+     *  once per eye viewport at the exact screen centre (from the bottom up to the middle).
+     *  Used to confirm the two eyes are rendering stereoscopically. Adjustable. */
     val showCenterAlignmentLine: Boolean = false,
-    /** When true, mirrors the video horizontally (left-right flip).
-     *  Controllable via VR settings; no shader source change required. */
+    /** When true, mirrors the STREAM only, left-right. Status panel, menu and 360° background are
+     *  untouched. Implemented with quad texture coordinates, no shader source change. */
     val horizontalMirror: Boolean = false,
+    /** When true, flips the STREAM only, top-bottom. Status panel, menu and 360° background are
+     *  untouched. Independent of [horizontalMirror]; enabling both rotates the stream by 180°. */
+    val verticalFlip: Boolean = false,
     /** When true, draws a 360° (equirectangular) image as the VR environment behind the screen.
      *  Off by default to keep the original pure-black behaviour and the low-end perf budget. */
     val backgroundEnabled: Boolean = false,
@@ -91,6 +96,7 @@ data class VrSettings(
         menuRepeatMs = menuRepeatMs.coerceIn(VrRanges.REPEAT_MIN_MS, VrRanges.REPEAT_MAX_MS),
         showCenterAlignmentLine = showCenterAlignmentLine,
         horizontalMirror = horizontalMirror,
+        verticalFlip = verticalFlip,
         backgroundEnabled = backgroundEnabled,
         backgroundImageUri = backgroundImageUri,
         backgroundBrightness = backgroundBrightness.coerceIn(
