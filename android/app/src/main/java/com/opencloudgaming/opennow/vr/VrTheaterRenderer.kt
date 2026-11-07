@@ -579,7 +579,7 @@ class VrTheaterRenderer : CardboardView.Renderer {
          * t=0, so the quad's top vertex (v=0) already samples the top of the panel: no flip needed.
          * If a device reports upside-down text, change this single constant to 1.0f.
          */
-        const val PANEL_FLIP_Y = 0.0f
+        const val PANEL_FLIP_Y = 1.0f
 
         const val MAX_VERTICES = (VrScreenGeometry.DEFAULT_SEGMENTS + 1) * 2
 
