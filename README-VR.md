@@ -37,7 +37,7 @@
 | 纯黑背景 + 无串流时的 2D 状态面板（不再是空白屏） | 已实现，**真机未验证** |
 | 低端机性能优化（渲染循环零堆分配、顶点 50→4、面板节流、官方单目省电档） | 已实现，详见 `HANDOFF.md` 第 9 节 |
 | **P3 手柄驱动的可见 VR 设置面板** | **已实现**：**长按** `START+SELECT` 或**长按** `HOME/MODE` 打开双列菜单（现 21 行），`↑↓` 选择、`←→` 调整、`A` 确认；含瞳距/背景/镜像/翻转/辅助线/重置中心点等全部可调项 |
-| **瞳距 / IPD 缩放** | **已实现**：`ipdScale` 0.5~1.6x（默认 1.0），纯 Kotlin 缩放 `viewMatrix[12]`，不改 shader、不改 SDK device params |
+| **等效瞳距 / 左右眼视差** | **已实现**：`ipdScale` 0.5~1.6x（默认 1.0 = 零改动），对左右眼最终裁剪坐标施加等大反向水平位移（`VrMatrix4.applyIpdShiftInto`）。**已放弃**旧做法「缩放 `viewMatrix[12]`」：SDK 的 `eyeFromHead`、离轴投影、畸变 mesh 同源于 `inter_lens_distance`，只改其一会让相机与视锥失配、左右眼无法融合。不改 shader、不改 SDK 参数 |
 | **重置中心点（头部追踪校准）** | **已实现**：把当前头朝向记为新的正前方；`VrHeadPose` 计算 `current * conj(center)` 相对旋转；VR 菜单动作项 + 手机设置页按钮均可触发 |
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
 | **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。用户反馈「状态栏隐藏了但不是全屏」后追加铺满修复；待真机复测 |
@@ -98,7 +98,7 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `brightness` | 画面亮度 | 0.4 ~ 1.4（1.0） |
 | `curvature` | 幕布曲率，0 = 纯平面 | 0.0 ~ 1.0（0.0） |
 | `screenVerticalOffset` | 画面垂直位置 | -1.0 ~ 1.0 m（0.0） |
-| `ipdScale` | **瞳距 / IPD 缩放**：调小左右眼更容易重合、调大立体感更强；1.00x = 纸盒设备默认值 | 0.5 ~ 1.6（1.0） |
+| `ipdScale` | **等效瞳距 / 左右眼视差**：调小左右眼画面靠拢更易重合、调大分离立体感更强；1.00x = 完全不改动 SDK 原版渲染（幕布与 360° 背景一起生效；单目 SIMULATION 模式不生效） | 0.5 ~ 1.6（1.0） |
 | `viewerMode` | `CARDBOARD`（立体+畸变，插纸盒）/ `SIMULATION`（单目全屏，裸眼） | `CARDBOARD` |
 | `headTrackingEnabled` | 头部追踪开关（**仅影响视角**） | true |
 | `headTrackingSensitivity` | 追踪灵敏度 | 0.0 ~ 1.5（1.0） |
@@ -183,7 +183,8 @@ VR 内手柄菜单同样有「360° 背景图 / 背景亮度 / 串流左右镜�
 | `42359487355` | `27ceea1` | **失败** | 新增 `ipdScale` + 重置中心点；`VrModeHost` 跨类访问 `VrTheaterView.theaterRenderer`（`private`），Kotlin 编译报错。已在 `8294d61` 修复 |
 | `42359823182` | `15315de` | **失败** | 菜单改长按 START+SELECT + HOME；同样因上一条的 private 访问失败（该提交基于含错误代码的 main） |
 | `42361113685` | `8294d61` | **失败** | 修 private 编译错误（`VrTheaterView.recenter()` public 包装）、`START+SELECT` 移出 VR 开关组合、HOME/MODE 也改长按、菜单带 latch。Kotlin 编译已通过，但 JVM 单测 `VrGamepadRouterTest` 第 55 行断言失败（计时起点落在第一个 key-repeat）；已在 `9d4ddd2` 修复 |
-| **`42362976400`** | **`9d4ddd2`** | **成功** | **当前版本**：长按计时起点前移到组合成立的初始 `ACTION_DOWN`、加 1499L 边界断言与注释订正；两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫） |
+| `42362976400` | `9d4ddd2` | 成功 | 长按计时起点前移到组合成立的初始 `ACTION_DOWN`、加 1499L 边界断言与注释订正；两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫） |
+| **`42366035113`** | **`d3a0f32`** | **成功** | **当前版本**：重做 IPD —— 放弃缩放 `viewMatrix[12]`（破坏 Cardboard `eyeFromHead` / 离轴投影 / 畸变 mesh 三者同源性，左右眼失配无法融合；真机反馈「ipd 调整不正常」），改为 `VrMatrix4.applyIpdShiftInto()` 在每眼最终 MVP 上做等大反向屏幕空间位移；`VrMatrix4Test` 删旧 2 例、新增 4 例。两 job 全绿。**效果待真机复测** |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；

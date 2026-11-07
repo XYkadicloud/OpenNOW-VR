@@ -167,7 +167,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | **上下翻转 / 左右镜像修复 + 中心辅助线** | **真机反馈失败后已重做**（`9fb1d16`，详见 §13） | 旧方案三件套全部作废：`PANEL_FLIP_Y = 1.0f` 只翻基础 UI、`stMatrix[0]` 取负会推偏画面、辅助线画在状态面板 Canvas 会跟头转。现改为 `PANEL_FLIP_Y = 0.0f` + 视频专用 `videoTexCoordBuffer`（`u→1-u` / `v→1-v`，只作用串流、不改任何 GLSL）+ `onFinishFrame()` 物理屏幕层单条白色竖线。**画面效果待真机复测** |
 | **VR 期间强制横向 + 真全屏铺满** | 代码完成（待真机复测） | `MainActivity` 用 `lifecycleScope` 收集 `VrSession.enabled`：VR 开启时 `vrFullscreenActive=true`，锁 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`、强制 immersive；退出后恢复。用户后续反馈「状态栏隐藏了但不是全屏」，追加 `FLAG_LAYOUT_NO_LIMITS`、`hide(systemGestures + displayCutout)`、`LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`（`OpenNowSystemBars.kt`），让内容铺满含刘海/手势区的整个物理屏。见 §13.3 / §14 |
 | **可选 360° 全景背景 + 用户导入图片** | 代码完成 + CI 验证 | 新增 `backgroundEnabled` / `backgroundImageUri` / `backgroundBrightness`，**默认关闭**（保持纯黑外观与零拷贝视频通路）。低多边形等距圆柱球体（16×24、2304 顶点）在幕布**之前**绘制，复用现有 panel program（`uFlip=0`），无需深度测试、无需新 shader；内置程序化星空兜底（不依赖任何资源文件）；图片经 `ACTION_OPEN_DOCUMENT` 导入并 `takePersistableUriPermission`，`>2048px` 自动降采样。所有 GL 创建/上传/释放都在 GL 线程，`applySettings` 只置标志。CI run `42347655425`（`7a9abfb`）双 job 全绿。真机画面待复测 |
-| **瞳距 / IPD 缩放** | 代码完成（待真机复测） | `VrSettings.ipdScale`（0.5~1.6，默认 1.0）+ `VrMatrix4.scaleIpdInto()` 只缩放 `viewMatrix[12]`（column-major 的 x translation = `eyeFromHead` 的 ±IPD/2；head rotation 零平移）。幕布与 360° 球体共用 MVP，因此一起生效。默认 1.0 时整段跳过，行为与之前 bit-identical；不改 shader、不改 SDK device params。2D 滑块 + VR 菜单行 + 持久化 + JVM 单测齐全。见 §14 |
+| **等效瞳距 / 左右眼视差** | 代码完成（真机反馈「不正常」后已重写，待复测） | `VrSettings.ipdScale`（0.5~1.6，默认 1.0）。**不再**缩放 `viewMatrix[12]`；改为 `VrMatrix4.applyIpdShiftInto()` 在每眼最终 MVP 上做等大反向的屏幕空间水平位移（`clip.x += k·clip.w`），保持 SDK 的 eyeFromHead / 离轴投影 / 畸变 mesh 原样自洽。默认 1.00x 严格零改动，单目模式不生效。2D 滑块 + VR 菜单行 + 持久化 + JVM 单测齐全。见 **§14.8** |
 | **重置中心点** | 代码完成（待真机复测） | `VrHeadPose.viewRotationInto(out, current, center, sensitivity)` 新增四参重载，算 `current * conj(center)` 相对旋转；`VrTheaterRenderer` 存 `centerOffsetQuaternion`，`recenter()` 抓当前头朝向。`VrSession.onRecenter` 由 `VrModeHost` 接到 `VrTheaterView.recenter()`（renderer 是 private，须经此 public 方法）。VR 菜单「重置中心点」动作项 + 手机设置页按钮。见 §14 |
 | **菜单触发改长按** | 代码完成（待真机复测） | 用户要求 `START/SELECT` 不能单按触发设置、且 `HOME/MODE` 也要长按。现为长按 `START+SELECT` 或长按 `HOME/MODE` ≥ `MENU_LONG_PRESS_MS=500ms`；`START+SELECT` 从 `VR_TOGGLE_COMBOS` 移除（VR 开关只留 `L1+R1`）；短按全部透传给游戏；触发带 latch 防连发。见 §14 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
@@ -700,15 +700,15 @@ Cardboard SDK 的 `onRenderStereoFrame()` 把左右眼分别画到 FBO 的两个
   关闭时 `clearFlags`，让 decor 内容延伸到状态栏 / 手势区 / 刘海区。
 - `styles.xml` 保持 `windowFullscreen=false` 不动（运行时 insets controller 已接管，避免影响非 VR 原版 UI）。
 
-### 14.3 瞳距 / IPD（commit `27ceea1` 一带）
+### 14.3 瞳距 / IPD（初版 `27ceea1`；**渲染方式已重写，见 §14.8**）
 
 - `VrRanges` 增 `IPD_SCALE_MIN=0.5 / MAX=1.6 / STEP=0.05`；`VrSettings.ipdScale=1.0f`，
   `sanitized()` 钳制；`VrSettingsStore` 加 `K_IPD_SCALE` 读写；`VrSettingSpecs.ALL` 加 2D 滑块；
   `VrMenuModel` 加「瞳距 / IPD」RANGE 行；`VrSettingsSection` 底部说明补用法。
-- `VrMatrix4.scaleIpdInto(out, scale)` 只改 `out[12]`。依据：`Eye.getEyeFromHead()` 对左右眼是
-  ±IPD/2 的纯 x 平移，head rotation 矩阵零平移，所以 `viewMatrix[12]` 恰好是瞳距位移。
-  幕布与 360° 球体共用 `mvpMatrix`，一起生效。
-- 默认 `1.0f` 时渲染器整段 `if` 跳过，行为与之前 bit-identical。不改 shader、不改 SDK 参数。
+- **初版（已废弃）**：`VrMatrix4.scaleIpdInto()` 只缩放 `viewMatrix[12]`（`eyeFromHead` 的
+  ±IPD/2 平移）。用户真机反馈「ipd 调整不正常」，根因与修复见 **§14.8**。
+- 数值通路（菜单 → `VrSession.updateSettings` → StateFlow → `VrModeHost` → `VrTheaterView
+  .applySettings` → renderer）经核对完整，问题不在设置传递，而在渲染数学。
 
 ### 14.4 重置中心点（commit `27ceea1`）
 
@@ -749,7 +749,7 @@ Cardboard SDK 的 `onRenderStereoFrame()` 把左右眼分别画到 FBO 的两个
 1. VR 画面是否**铺满整个物理屏**（无上下/左右黑边、刘海与手势区无留黑）。
 2. 长按 500 ms 手感是否合适；目标手柄是否确实发送 OS key-repeat `ACTION_DOWN`
    （**到点触发**依赖它，与菜单内长按十字键同一机制；**计时本身从初始按下开始，不依赖 repeat 延迟**）。
-3. 「瞳距 / IPD」调小/调大是否确实改变左右眼分离、可随时恢复 1.00x。
+3. 「瞳距 / IPD」调小/调大是否让左右眼画面靠拢 / 分离且**能正常融合**（旧版是错位重影）、可随时恢复 1.00x。
 4. 「重置中心点」是否把歪头时的画面摆正；退出 VR 后是否重置。
 5. §13.5 列出的第二轮画面项（基础 UI 正立、串流镜像/翻转、辅助线固定屏幕中央）。
 6. 退出 VR 后方向 / 系统栏 / 全屏 flags 是否恢复原状。
@@ -785,3 +785,53 @@ key-repeat 的 `ACTION_DOWN`（`alreadyDown==true`）分支里赋值。测试里
 `Handler.postDelayed`（会破坏纯 JVM 可测性），属已知限制，真机验证项见 §14.6 第 2 条。
 另：`VrHeadPose` 四参重载每帧 `FloatArray(4)` 临时分配（与 §9 零分配目标冲突）、
 `centerOffsetQuaternion` 主线程写 / GL 线程读无同步，均为待优化项，本轮未改动。
+
+---
+
+### 14.8 2026-11-07 第五轮：修复「ipd 调整不正常」
+
+**用户反馈**：`9d4ddd2` 绿灯版本的真机上，「ipd调整不正常」。
+
+**根因（读 vendor Cardboard SDK 源码定案；不是设置没传到 renderer）**：
+数值通路完整（VR 菜单 / 2D 滑块 → `VrMenuModel.adjust` → `VrSession.updateSettings` →
+StateFlow → `VrModeHost` → `VrTheaterView.applySettings` → renderer），`ipdScale` 确实到达
+`onDrawEye`。问题在旧实现只缩放 `viewMatrix[12]`：
+
+- `third_party/cardboard/sdk/lens_distortion.cc:44-47`：
+  `eye_from_head_matrix_[kLeft/kRight] = Translation(±inter_lens_distance/2, 0, 0)`。
+- 同文件 `:71-75`：`GetEyeProjectionMatrix()` = `Matrix4x4::Perspective(fov_[eye], ...)`，
+  而 `fov_` 由 `CalculateFov()`（`:172-194`）用**同一个 `inter_lens_distance`** 算出的离轴
+  `outer_angle` / `inner_angle`（还经过非线性 `distortion.Distort`）。
+- 同文件 `:229-244`：`CalculateViewportParameters()` 又用同一参数算畸变 mesh 的 `x_eye_offset`。
+
+即 **eyeFromHead 平移、离轴投影、畸变 mesh 三者同源于 `inter_lens_distance`，是必须一起变的
+一套**。只改 `viewMatrix[12]` 让相机位置与它的视锥 / 畸变失配 → 左右眼画面朝相反方向错位、
+无法融合。`VrMatrix4.scaleIpdInto` 的 KDoc 当初假设「投影矩阵不含 IPD」，该前提是错的。
+
+**修复（纯 Kotlin、不改 shader、不改 SDK 参数）**：
+放弃在 renderer 里重算 SDK 瞳距（那要改 vendor `LensDistortion` 并重编译 AAR，还会连光学畸变
+一起改掉，风险大）。改为**完全不碰 SDK 的 view + projection + distortion**，只在每眼 MVP 组装
+完成后做等大反向的屏幕空间水平位移：
+
+- `VrMatrix4.applyIpdShiftInto(out, ipdScale, eyeSign)`：实现 `clip.x += k * clip.w`，即把
+  第 3 行（clip.w）乘 `k` 加到第 0 行（clip.x）；`k = (1 - ipdScale) * IPD_SHIFT_GAIN(0.08)
+  * eyeSign`，左眼 +1 / 右眼 -1 / 单目 0。调小 → 左右眼靠拢更易重合；调大 → 分离立体感更强。
+- `VrTheaterRenderer.onDrawEye()`：删掉 `scaleIpdInto(viewMatrix, ...)`，在
+  `multiplyInto(mvpMatrix, projection, view)` **之后**调用 `applyIpdShiftInto`；`eyeSign` 由
+  `eye.getEyeType()` 得到（`Eye.LEFT=0 / RIGHT=1 / MONOCULAR=2`）。幕布与 360° 球体共用
+  `mvpMatrix`，一起生效。
+- **默认 1.00x 时 k=0 且整段跳过，与未修改的 SDK 渲染 bit-identical**；MONOCULAR
+  （SIMULATION）不生效。
+- 对单块固定深度的平面幕布，屏幕空间视差与改变瞳距视觉等价，但绝不会破坏立体自洽性。
+
+**测试**：`VrMatrix4Test` 删掉旧 `scaleIpdInto` 两例，新增 4 例 —— 默认 / 单目 no-op
+（delta=0 全矩阵相等）、只改 x 行且增量 = k·w 行、左右眼等大反向且调小 / 调大方向相反、
+错误尺寸抛异常。菜单 / 范围 / 持久化 / 滑块通路不动。
+
+**验证**：run `42366035113`（`d3a0f32`）两 job 全绿 —— `build-cardboard-sdk-aar`、
+`Run VR JVM unit tests and build the debug APK`（JVM 单测全通过、debug APK 产出）、
+`Assert VR JVM tests actually ran`、`Collect the APK` 以及两处
+`Verify the Cardboard JNI bridge ...` 全部 success。当前 `main` 恢复绿灯。
+文档（`README-VR.md` / `docs/HANDOFF.md`）随后以纯文档 `[skip ci]` 提交单独推送。
+
+**待真机复测**：调小 / 调大是否让左右眼画面靠拢 / 分离且能正常融合，1.00x 是否与原版一致。
