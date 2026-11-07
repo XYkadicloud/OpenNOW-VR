@@ -599,6 +599,12 @@ class MainActivity : ComponentActivity() {
     private fun applyVrFullscreen(active: Boolean) {
         if (vrFullscreenActive == active) return
         vrFullscreenActive = active
+        // Allow window content to extend into status bar, navigation bar, gesture area, and display cutout.
+        if (active) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        }
         applyPhoneStreamOrientationLock(phoneStreamOrientationLocked)
         applyStreamSystemBars(streamSystemUiActive)
     }

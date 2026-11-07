@@ -121,6 +121,16 @@ object VrSettingSpecs {
             write = { s, v -> s.copy(gamepadDeadZone = v) },
         ),
         VrSettingSpec(
+            id = "ipdScale",
+            label = "瞳距 / IPD 缩放",
+            min = VrRanges.IPD_SCALE_MIN,
+            max = VrRanges.IPD_SCALE_MAX,
+            step = VrRanges.IPD_SCALE_STEP,
+            unit = "x",
+            read = { it.ipdScale },
+            write = { s, v -> s.copy(ipdScale = v) },
+        ),
+        VrSettingSpec(
             id = "menuRepeatMs",
             label = "菜单连发间隔",
             min = VrRanges.REPEAT_MIN_MS.toFloat(),

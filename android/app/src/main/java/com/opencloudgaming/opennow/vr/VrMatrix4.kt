@@ -68,6 +68,20 @@ object VrMatrix4 {
         return out
     }
 
+    /**
+     * Scales the effective interpupillary distance (IPD) of a per-eye VIEW matrix.
+     *
+     * Cardboard's `Eye.getEyeFromHead()` is a pure x translation of +/- ipd/2 (metres); our head
+     * rotation matrix has zero translation, so `viewMatrix[12]` carries exactly that eye offset.
+     * Multiplying it scales stereo separation without touching the projection matrix, any GLSL
+     * source, or SDK device parameters. Zero-allocation, safe on the GL render thread.
+     */
+    fun scaleIpdInto(out: FloatArray, scale: Float): FloatArray {
+        require(out.size == SIZE) { "4x4 matrix required" }
+        out[12] *= scale
+        return out
+    }
+
     /** Rotation matrix around an arbitrary axis, equivalent to glRotatef(angleRadians). */
     fun rotation(axisX: Float, axisY: Float, axisZ: Float, angleRadians: Float): FloatArray =
         rotationInto(FloatArray(SIZE), axisX, axisY, axisZ, angleRadians)

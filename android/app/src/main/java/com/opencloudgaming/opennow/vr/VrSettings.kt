@@ -37,6 +37,11 @@ object VrRanges {
     const val BACKGROUND_BRIGHTNESS_MAX = 1.5f
     const val BACKGROUND_BRIGHTNESS_STEP = 0.05f
 
+    /** Interpupillary distance, expressed as a multiplier of the Cardboard device default IPD. */
+    const val IPD_SCALE_MIN = 0.5f
+    const val IPD_SCALE_MAX = 1.6f
+    const val IPD_SCALE_STEP = 0.05f
+
     const val REPEAT_MIN_MS = 60L
     const val REPEAT_MAX_MS = 500L
     const val REPEAT_STEP_MS = 20L
@@ -79,6 +84,15 @@ data class VrSettings(
     val backgroundImageUri: String = "",
     /** Independent brightness for the 360° background only (the screen keeps its own brightness). */
     val backgroundBrightness: Float = 1.0f,
+    /**
+     * Interpupillary distance / 瞳距, as a multiplier of the Cardboard device default.
+     *
+     * 1.0 = exactly the device-calibrated IPD (unchanged behaviour). Lower values pull the two
+     * eye viewpoints together (weaker stereo, easier fusion); higher values separate them
+     * (stronger depth, more likely double image). Implemented by scaling the x eye-displacement
+     * in the per-eye view matrix — pure Kotlin, NO shader change, NO SDK state mutation.
+     */
+    val ipdScale: Float = 1.0f,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -102,6 +116,7 @@ data class VrSettings(
         backgroundBrightness = backgroundBrightness.coerceIn(
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
         ),
+        ipdScale = ipdScale.coerceIn(VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX),
     )
 
     companion object {

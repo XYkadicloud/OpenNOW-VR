@@ -9,6 +9,7 @@ enum class VrMenuItemId {
     BRIGHTNESS,
     CURVATURE,
     VERTICAL_OFFSET,
+    IPD_SCALE,
     VIEWER_MODE,
     HEAD_TRACKING,
     HEAD_SENSITIVITY,
@@ -48,6 +49,8 @@ object VrMenuModel {
             VrRanges.CURVATURE_MIN, VrRanges.CURVATURE_MAX, VrRanges.CURVATURE_STEP),
         VrMenuItem(VrMenuItemId.VERTICAL_OFFSET, "画面高低 (m)", VrMenuItemKind.RANGE,
             VrRanges.VERTICAL_OFFSET_MIN, VrRanges.VERTICAL_OFFSET_MAX, VrRanges.VERTICAL_OFFSET_STEP),
+        VrMenuItem(VrMenuItemId.IPD_SCALE, "瞳距 / IPD", VrMenuItemKind.RANGE,
+            VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX, VrRanges.IPD_SCALE_STEP),
         VrMenuItem(VrMenuItemId.VIEWER_MODE, "视角模式", VrMenuItemKind.ENUM),
         VrMenuItem(VrMenuItemId.HEAD_TRACKING, "头部追踪", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.HEAD_SENSITIVITY, "追踪灵敏度", VrMenuItemKind.RANGE,
@@ -75,6 +78,7 @@ object VrMenuModel {
         VrMenuItemId.BRIGHTNESS -> settings.brightness
         VrMenuItemId.CURVATURE -> settings.curvature
         VrMenuItemId.VERTICAL_OFFSET -> settings.screenVerticalOffset
+        VrMenuItemId.IPD_SCALE -> settings.ipdScale
         VrMenuItemId.VIEWER_MODE -> if (settings.viewerMode == VrViewerMode.CARDBOARD) 0f else 1f
         VrMenuItemId.HEAD_TRACKING -> if (settings.headTrackingEnabled) 1f else 0f
         VrMenuItemId.HEAD_SENSITIVITY -> settings.headTrackingSensitivity
@@ -95,6 +99,7 @@ object VrMenuModel {
         VrMenuItemId.BRIGHTNESS -> String.format(Locale.US, "%.2f", settings.brightness)
         VrMenuItemId.CURVATURE -> String.format(Locale.US, "%.1f", settings.curvature)
         VrMenuItemId.VERTICAL_OFFSET -> String.format(Locale.US, "%+.1f m", settings.screenVerticalOffset)
+        VrMenuItemId.IPD_SCALE -> String.format(Locale.US, "%.2f x", settings.ipdScale)
         VrMenuItemId.VIEWER_MODE -> if (settings.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"
         VrMenuItemId.HEAD_TRACKING -> if (settings.headTrackingEnabled) "开" else "关"
         VrMenuItemId.HEAD_SENSITIVITY -> String.format(Locale.US, "%.1f", settings.headTrackingSensitivity)
@@ -161,6 +166,7 @@ object VrMenuModel {
         VrMenuItemId.BRIGHTNESS -> settings.copy(brightness = value)
         VrMenuItemId.CURVATURE -> settings.copy(curvature = value)
         VrMenuItemId.VERTICAL_OFFSET -> settings.copy(screenVerticalOffset = value)
+        VrMenuItemId.IPD_SCALE -> settings.copy(ipdScale = value)
         VrMenuItemId.HEAD_SENSITIVITY -> settings.copy(headTrackingSensitivity = value)
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> settings.copy(gamepadDeadZone = value)
         VrMenuItemId.MENU_REPEAT -> settings.copy(menuRepeatMs = value.toLong())

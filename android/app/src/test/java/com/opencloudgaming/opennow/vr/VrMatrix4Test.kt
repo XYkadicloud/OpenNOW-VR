@@ -155,4 +155,29 @@ class VrMatrix4Test {
         VrMatrix4.rotationInto(rotationOut, 0f, 1f, 0f, 0.65f)
         assertEqualsMatrix(VrMatrix4.rotation(0f, 1f, 0f, 0.65f), rotationOut)
     }
+
+    // --- IPD / 瞳距 -------------------------------------------------------------------------
+
+    @Test
+    fun scaleIpdIntoOnlyChangesTheHorizontalEyeTranslation() {
+        // Cardboard's eyeFromHead carries +/- ipd/2 in the x translation slot (column 3, row 0).
+        val view = VrMatrix4.identity().also { it[12] = 0.032f } // +32 mm, right eye
+        val before = view.copyOf()
+        val returned = VrMatrix4.scaleIpdInto(view, 1.5f)
+        assertTrue("must write into the caller's array", returned === view)
+        assertEquals(0.048f, view[12], 1e-6f)
+        for (i in 0 until VrMatrix4.SIZE) {
+            if (i != 12) assertEquals("element $i must be untouched", before[i], view[i], 0f)
+        }
+    }
+
+    @Test
+    fun scaleIpdIntoAtOneIsANoOpAndRejectsBadSize() {
+        val view = VrMatrix4.identity().also { it[12] = -0.032f }
+        VrMatrix4.scaleIpdInto(view, 1.0f)
+        assertEquals(-0.032f, view[12], 1e-6f)
+        assertThrows(IllegalArgumentException::class.java) {
+            VrMatrix4.scaleIpdInto(FloatArray(9), 1.2f)
+        }
+    }
 }

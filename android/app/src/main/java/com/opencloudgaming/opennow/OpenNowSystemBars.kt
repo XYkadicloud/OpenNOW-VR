@@ -5,6 +5,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import androidx.core.view.WindowCompat
 
 /** The window owns visibility; stream input, pointer capture and keep-awake remain independent. */
@@ -14,9 +15,22 @@ internal fun applyOpenNowSystemBars(window: Window, immersive: Boolean) {
         window.insetsController?.let { controller ->
             if (immersive) {
                 controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                // Hide status, navigation AND system gestures (bottom swipe area) so VR covers the
+                // entire physical display. Display cutout (notch / punch-hole) is also hidden.
+                controller.hide(
+                    WindowInsets.Type.statusBars()
+                            or WindowInsets.Type.navigationBars()
+                            or WindowInsets.Type.systemGestures()
+                            or WindowInsets.Type.displayCutout()
+                )
+                // Allow content to extend into the cutout / gesture area.
+                window.setDecorFitsSystemWindows(false)
+                window.attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             } else {
                 controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                window.attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
             }
         }
     } else {
@@ -26,6 +40,14 @@ internal fun applyOpenNowSystemBars(window: Window, immersive: Boolean) {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         } else 0
+        // Pre-R: also allow layout into cutout if the device has one.
+        if (immersive) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        } else {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+        }
     }
 }
 

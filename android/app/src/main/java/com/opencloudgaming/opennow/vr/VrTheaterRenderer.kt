@@ -293,6 +293,14 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             identityMatrix
         }
         VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
+        // IPD / 瞳距: eyeFromHead is a pure x translation (+/- ipd/2) and the head rotation has
+        // zero translation, so viewMatrix[12] is exactly that eye offset. Scaling it changes the
+        // stereo separation for BOTH the cinema quad and the 360° sphere (they share the MVP).
+        // 1.0 = device default, skipped entirely so the default path is bit-identical to before.
+        // Pure Kotlin matrix maths: no shader source and no Cardboard device params are touched.
+        if (current.ipdScale != 1.0f) {
+            VrMatrix4.scaleIpdInto(viewMatrix, current.ipdScale)
+        }
         VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
 
         // 360° background sphere: drawn FIRST so the flat cinema panel overdraws its centre.
@@ -942,8 +950,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         const val PANEL_W = 768
         const val PANEL_H = 432
         const val MENU_ASPECT = 16f / 9f
-        // 19 rows fit in two columns of 10; 30px rows keep the last baseline (366) clear of the
-        // bottom hint (408) on the 432px-tall panel.
+        // 20 rows fit exactly in two columns of 10; 30px rows keep the last baseline (366) clear
+        // of the bottom hint (408) on the 432px-tall panel.
         const val MENU_ROWS_PER_COLUMN = 10
         const val MENU_ROW_HEIGHT = 30f
 

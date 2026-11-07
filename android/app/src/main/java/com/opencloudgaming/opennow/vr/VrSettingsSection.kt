@@ -148,6 +148,7 @@ fun VrSettingsSection() {
         }
         Text(
             text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）。若朝向不对，分别试开「左右镜像」和「上下翻转」，两项可叠加，默认都关、随时可恢复。" +
+                "「瞳距 / IPD 缩放」1.00x = 纸盒设备默认值；调小左右眼更容易重合、调大立体感更强，随时可恢复。" +
                 "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),

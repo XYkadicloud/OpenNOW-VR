@@ -29,6 +29,7 @@ class VrSettingsStore(context: Context) {
         backgroundEnabled = prefs.getBoolean(K_BG_ENABLED, VrSettings.DEFAULT.backgroundEnabled),
         backgroundImageUri = prefs.getString(K_BG_URI, VrSettings.DEFAULT.backgroundImageUri) ?: "",
         backgroundBrightness = prefs.getFloat(K_BG_BRIGHT, VrSettings.DEFAULT.backgroundBrightness),
+        ipdScale = prefs.getFloat(K_IPD_SCALE, VrSettings.DEFAULT.ipdScale),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -51,6 +52,7 @@ class VrSettingsStore(context: Context) {
             .putBoolean(K_BG_ENABLED, s.backgroundEnabled)
             .putString(K_BG_URI, s.backgroundImageUri)
             .putFloat(K_BG_BRIGHT, s.backgroundBrightness)
+            .putFloat(K_IPD_SCALE, s.ipdScale)
             .apply()
     }
 
@@ -72,5 +74,6 @@ class VrSettingsStore(context: Context) {
         const val K_BG_ENABLED = "backgroundEnabled"
         const val K_BG_URI = "backgroundImageUri"
         const val K_BG_BRIGHT = "backgroundBrightness"
+        const val K_IPD_SCALE = "ipdScale"
     }
 }

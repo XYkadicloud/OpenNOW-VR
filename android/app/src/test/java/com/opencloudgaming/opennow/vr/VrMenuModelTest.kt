@@ -8,7 +8,7 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(19, VrMenuModel.items.size)
+        assertEquals(20, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -134,6 +134,27 @@ class VrMenuModelTest {
             VrRanges.DISTANCE_STEP,
             VrMenuModel.items.first { it.id == VrMenuItemId.SCREEN_DISTANCE }.step,
             0f,
+        )
+    }
+
+    @Test
+    fun ipdScaleUsesItsOwnStepAndIsClamped() {
+        val s = VrSettings.DEFAULT
+        assertEquals(1.0f, s.ipdScale, 0f)
+        assertEquals(
+            1.0f + VrRanges.IPD_SCALE_STEP,
+            VrMenuModel.adjust(s, VrMenuItemId.IPD_SCALE, 1).ipdScale,
+            1e-5f,
+        )
+        assertEquals(
+            VrRanges.IPD_SCALE_MAX,
+            VrMenuModel.adjust(s, VrMenuItemId.IPD_SCALE, 10_000).ipdScale,
+            1e-4f,
+        )
+        assertEquals(
+            VrRanges.IPD_SCALE_MIN,
+            VrMenuModel.adjust(s, VrMenuItemId.IPD_SCALE, -10_000).ipdScale,
+            1e-4f,
         )
     }
 }
