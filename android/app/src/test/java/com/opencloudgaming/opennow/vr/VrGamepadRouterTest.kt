@@ -45,13 +45,24 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_R1))
     }
 
-    /** START+SELECT is reserved for the menu long-press; it must NOT exit VR any more. */
+    /**
+     * START+SELECT is reserved for the menu long-press; it must NOT exit VR any more.
+     *
+     * The 500 ms timer starts when the combination first becomes held (the initial ACTION_DOWN at
+     * 1000L), NOT on the first OS key-repeat. If it started on the repeat (1200L) instead, the
+     * device's repeat delay would be added on top of the threshold and the 1600L event below would
+     * still be only 400 ms in. The 1499L/1600L pair pins that contract down.
+     */
     @Test
     fun startSelectDoesNotToggleVrButLongPressOpensMenu() {
         val r = VrGamepadRouter().also { it.vrEnabled = true }
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 1000L))
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1000L))
+        // First OS key-repeat: 200 ms elapsed, still below threshold.
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1200L))
+        // 499 ms since the initial press: must not fire yet.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1499L))
+        // 600 ms since the initial press: fires exactly once.
         assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_START, 1600L))
     }
 
@@ -63,12 +74,13 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_SELECT, 1100L))
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1200L))
         assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_START, 1300L))
-        // Long-press START+SELECT together opens menu.
+        // Long-press START+SELECT together opens menu. The timer starts here at 2000L, when the
+        // second key of the combination goes down (not at the first OS repeat).
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 2000L))
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 2000L))
-        // Before threshold: still pass-through.
+        // 100 ms in: still pass-through.
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 2100L))
-        // After 500 ms threshold: toggles menu.
+        // 600 ms in: past the 500 ms threshold, toggles menu.
         assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_START, 2600L))
         r.menuOpen = true
         assertEquals(VrCommand.Confirm, press(r, VrKeys.BUTTON_A))
@@ -81,7 +93,8 @@ class VrGamepadRouterTest {
         val r = VrGamepadRouter().also { it.vrEnabled = true }
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 1000L))
         assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_MODE, 1100L))
-        // Hold again: first repeat starts the timer, 500 ms later it fires exactly once.
+        // Hold again: the timer starts at this initial press (2000L), so the first OS repeat below
+        // is already 100 ms in. 500 ms after 2000L it fires exactly once.
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 2000L))
         assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 2100L))
         assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_MODE, 2600L))

@@ -26,7 +26,9 @@ sealed class VrCommand {
  *  - No gaze / eye / dwell / head-gesture activation of any kind. Head pose is view-only.
  *  - L1+R1 toggles VR on/off. START+SELECT and HOME/MODE are NOT single-press shortcuts: the
  *    settings panel opens only after a LONG PRESS (>= VrKeys.MENU_LONG_PRESS_MS) so a stray tap
- *    in game can never open it. Short presses pass straight through to the game unchanged.
+ *    in game can never open it. Short presses pass straight through to the game unchanged. The
+ *    hold timer starts on the initial ACTION_DOWN that completes the combination, NOT on the first
+ *    OS key-repeat (see the note in onKey for why).
  *  - When the panel is open, D-pad / shoulder / face buttons / left stick drive the panel only,
  *    and a single press of B / SELECT / START / MODE closes it.
  *
@@ -80,8 +82,10 @@ class VrGamepadRouter {
             return VrCommand.Consumed
         }
         // The OS repeats ACTION_DOWN while a key is held. Outside the menu those repeats must stay
-        // pass-through so the game keeps its original behaviour; we only watch them for the
-        // long-press timer (START+SELECT together, or HOME/MODE alone).
+        // pass-through so the game keeps its original behaviour. A repeat is also the only clock
+        // tick this pure-JVM state machine gets: the timer is normally armed on the initial
+        // ACTION_DOWN (see below) and a repeat merely checks whether 500 ms have elapsed. The
+        // MIN_VALUE arm below is only a defensive fallback for a hold that became valid later.
         if (alreadyDown) {
             if (!menuOpen) {
                 if (vrEnabled && menuHoldActive()) {
@@ -111,7 +115,19 @@ class VrGamepadRouter {
 
         lastKeyRepeatMs = Long.MIN_VALUE
         if (menuOpen) return menuKey(keyCode)
-        // No single key opens the menu. The long-press timer starts on the first OS key-repeat.
+        // Arm the long-press timer as soon as the hold becomes active: the initial ACTION_DOWN of
+        // the second START/SELECT key, or of MODE. Starting it on the first OS key-repeat instead
+        // would add that controller's repeat delay (~400 ms, varies per device) on top of the
+        // user's 500 ms hold. Repeats are still required to FIRE (this class has no timer/Handler
+        // of its own), they just no longer start the clock.
+        if (vrEnabled && menuHoldActive()) {
+            if (menuHoldStartMs == Long.MIN_VALUE) {
+                menuHoldStartMs = timeMs
+            }
+        } else {
+            clearMenuHold()
+        }
+        // No single key opens the menu on its own.
         return VrCommand.PassThrough
     }
 
