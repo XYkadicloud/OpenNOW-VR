@@ -69,16 +69,43 @@ object VrMatrix4 {
     }
 
     /**
-     * Scales the effective interpupillary distance (IPD) of a per-eye VIEW matrix.
-     *
-     * Cardboard's `Eye.getEyeFromHead()` is a pure x translation of +/- ipd/2 (metres); our head
-     * rotation matrix has zero translation, so `viewMatrix[12]` carries exactly that eye offset.
-     * Multiplying it scales stereo separation without touching the projection matrix, any GLSL
-     * source, or SDK device parameters. Zero-allocation, safe on the GL render thread.
+     * NDC horizontal shift per 1.0 of IPD-scale change, applied to EACH eye in opposite
+     * directions. 0.08 means the widest settings (0.5x / 1.6x) move each eye's image by about
+     * 2-2.4% of the full screen width, which is clearly visible but never tears the stereo pair.
      */
-    fun scaleIpdInto(out: FloatArray, scale: Float): FloatArray {
+    const val IPD_SHIFT_GAIN = 0.08f
+
+    /**
+     * Applies an EFFECTIVE interpupillary-distance adjustment to a finished per-eye MVP matrix.
+     *
+     * Do NOT try to scale `Eye.getEyeFromHead()`'s x translation instead: in Cardboard SDK the
+     * eyeFromHead translation, the off-axis projection (`LensDistortion::CalculateFov`) and the
+     * distortion mesh (`CalculateViewportParameters`) are ALL derived from the very same
+     * `inter_lens_distance` device parameter. Changing only one of them leaves the camera position
+     * inconsistent with its frustum, so the two eyes drift apart and cannot fuse -- this is what
+     * made the original IPD slider look broken.
+     *
+     * Instead we leave the whole SDK view+projection+distortion chain untouched and shift each
+     * eye's final clip-space x by an equal-and-opposite amount: `clip.x += k * clip.w`. For our
+     * single flat cinema quad at a fixed depth this is visually equivalent to changing the IPD
+     * (it changes the horizontal parallax between the two eyes), but it can never break stereo
+     * self-consistency. `ipdScale == 1` gives k == 0, so the default path is bit-identical to the
+     * unmodified SDK rendering.
+     *
+     * [eyeSign] must be +1 for the left eye, -1 for the right eye, 0 for monocular (no-op).
+     * [out] is modified in place; zero allocation, safe on the GL render thread.
+     */
+    fun applyIpdShiftInto(out: FloatArray, ipdScale: Float, eyeSign: Float): FloatArray {
         require(out.size == SIZE) { "4x4 matrix required" }
-        out[12] *= scale
+        if (eyeSign == 0f || ipdScale == 1f) return out
+        val k = (1f - ipdScale) * IPD_SHIFT_GAIN * eyeSign
+        // clip.x is row 0 (indices 0,4,8,12); clip.w is row 3 (indices 3,7,11,15).
+        // Adding k * row3 to row0 implements clip.x += k * clip.w, i.e. a screen-space
+        // horizontal shift. Row 3 is never written, so in-place aliasing is safe.
+        out[0] += k * out[3]
+        out[4] += k * out[7]
+        out[8] += k * out[11]
+        out[12] += k * out[15]
         return out
     }
 

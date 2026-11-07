@@ -85,12 +85,16 @@ data class VrSettings(
     /** Independent brightness for the 360° background only (the screen keeps its own brightness). */
     val backgroundBrightness: Float = 1.0f,
     /**
-     * Interpupillary distance / 瞳距, as a multiplier of the Cardboard device default.
+     * Effective interpupillary distance / 等效瞳距, as a multiplier of the Cardboard default.
      *
-     * 1.0 = exactly the device-calibrated IPD (unchanged behaviour). Lower values pull the two
-     * eye viewpoints together (weaker stereo, easier fusion); higher values separate them
-     * (stronger depth, more likely double image). Implemented by scaling the x eye-displacement
-     * in the per-eye view matrix — pure Kotlin, NO shader change, NO SDK state mutation.
+     * 1.0 = unchanged SDK rendering (no shift at all). Lower values pull the two eyes' images
+     * together (weaker stereo, easier fusion); higher values push them apart (stronger stereo).
+     *
+     * Implemented as an equal-and-opposite screen-space shift of each eye's final clip-space x
+     * (`VrMatrix4.applyIpdShiftInto`), NOT by scaling `Eye.getEyeFromHead()` — the latter also
+     * feeds the off-axis projection and distortion mesh, so scaling it alone desynchronises the
+     * camera from its frustum and breaks stereo fusion. Pure Kotlin, NO shader source change,
+     * NO SDK device-parameter mutation. MONOCULAR/SIMULATION mode is unaffected.
      */
     val ipdScale: Float = 1.0f,
 ) {

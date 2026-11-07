@@ -156,28 +156,57 @@ class VrMatrix4Test {
         assertEqualsMatrix(VrMatrix4.rotation(0f, 1f, 0f, 0.65f), rotationOut)
     }
 
-    // --- IPD / 瞳距 -------------------------------------------------------------------------
+    // --- Effective IPD / 瞳距 ---------------------------------------------------------------
 
     @Test
-    fun scaleIpdIntoOnlyChangesTheHorizontalEyeTranslation() {
-        // Cardboard's eyeFromHead carries +/- ipd/2 in the x translation slot (column 3, row 0).
-        val view = VrMatrix4.identity().also { it[12] = 0.032f } // +32 mm, right eye
-        val before = view.copyOf()
-        val returned = VrMatrix4.scaleIpdInto(view, 1.5f)
-        assertTrue("must write into the caller's array", returned === view)
-        assertEquals(0.048f, view[12], 1e-6f)
+    fun ipdShiftIsANoOpAtDefaultScaleAndForMonocular() {
+        // Non-trivial w row so a wrong implementation cannot accidentally pass.
+        val mvp = VrMatrix4.rotation(0f, 1f, 0f, 0.4f).also {
+            it[3] = 0.2f; it[7] = -0.3f; it[11] = 0.4f; it[15] = 1.1f
+        }
+        val before = mvp.copyOf()
+        assertTrue("must write into the caller's array", VrMatrix4.applyIpdShiftInto(mvp, 1f, 1f) === mvp)
+        assertEqualsMatrix(before, mvp, 0f)
+        VrMatrix4.applyIpdShiftInto(mvp, 0.5f, 0f) // MONOCULAR / SIMULATION
+        assertEqualsMatrix(before, mvp, 0f)
+    }
+
+    @Test
+    fun ipdShiftAddsKTimesWRowToXRowOnly() {
+        val mvp = VrMatrix4.identity().also {
+            it[3] = 0.5f; it[7] = -0.25f; it[11] = 0.75f; it[15] = 2f
+        }
+        val before = mvp.copyOf()
+        val scale = 0.5f
+        val k = (1f - scale) * VrMatrix4.IPD_SHIFT_GAIN * 1f
+        VrMatrix4.applyIpdShiftInto(mvp, scale, 1f)
+        assertEquals(before[0] + k * before[3], mvp[0], 1e-6f)
+        assertEquals(before[4] + k * before[7], mvp[4], 1e-6f)
+        assertEquals(before[8] + k * before[11], mvp[8], 1e-6f)
+        assertEquals(before[12] + k * before[15], mvp[12], 1e-6f)
         for (i in 0 until VrMatrix4.SIZE) {
-            if (i != 12) assertEquals("element $i must be untouched", before[i], view[i], 0f)
+            if (i % 4 != 0) assertEquals("row $i must be untouched", before[i], mvp[i], 0f)
         }
     }
 
     @Test
-    fun scaleIpdIntoAtOneIsANoOpAndRejectsBadSize() {
-        val view = VrMatrix4.identity().also { it[12] = -0.032f }
-        VrMatrix4.scaleIpdInto(view, 1.0f)
-        assertEquals(-0.032f, view[12], 1e-6f)
+    fun ipdShiftIsEqualAndOppositeForTheTwoEyes() {
+        val base = VrMatrix4.identity().also { it[3] = 0.6f; it[15] = 1.5f }
+        val left = base.copyOf().also { VrMatrix4.applyIpdShiftInto(it, 0.5f, 1f) }
+        val right = base.copyOf().also { VrMatrix4.applyIpdShiftInto(it, 0.5f, -1f) }
+        val dl = left[0] - base[0]
+        val dr = right[0] - base[0]
+        assertTrue("reducing IPD must pull the two eyes' images together", dl > 0f)
+        assertEquals(dl, -dr, 1e-6f)
+        // Increasing IPD must push them apart (reverse direction).
+        val wide = base.copyOf().also { VrMatrix4.applyIpdShiftInto(it, 1.6f, 1f) }
+        assertTrue("increasing IPD must push the two eyes' images apart", wide[0] < base[0])
+    }
+
+    @Test
+    fun ipdShiftRejectsBadSize() {
         assertThrows(IllegalArgumentException::class.java) {
-            VrMatrix4.scaleIpdInto(FloatArray(9), 1.2f)
+            VrMatrix4.applyIpdShiftInto(FloatArray(9), 1.2f, 1f)
         }
     }
 }

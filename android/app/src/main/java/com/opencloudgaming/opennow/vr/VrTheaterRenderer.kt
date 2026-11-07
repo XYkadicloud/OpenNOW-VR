@@ -310,16 +310,23 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         } else {
             identityMatrix
         }
+        // Keep Cardboard's eyeFromHead + off-axis projection + distortion mesh completely intact.
+        // All three are derived from the same inter_lens_distance device parameter; scaling only
+        // the eye translation (the old approach) desynchronised the camera from its frustum and
+        // made the two eyes drift apart instead of fusing. The effective IPD is applied AFTER the
+        // MVP is assembled, as an equal-and-opposite screen-space shift per eye.
         VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
-        // IPD / 瞳距: eyeFromHead is a pure x translation (+/- ipd/2) and the head rotation has
-        // zero translation, so viewMatrix[12] is exactly that eye offset. Scaling it changes the
-        // stereo separation for BOTH the cinema quad and the 360° sphere (they share the MVP).
-        // 1.0 = device default, skipped entirely so the default path is bit-identical to before.
-        // Pure Kotlin matrix maths: no shader source and no Cardboard device params are touched.
-        if (current.ipdScale != 1.0f) {
-            VrMatrix4.scaleIpdInto(viewMatrix, current.ipdScale)
-        }
         VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
+        // 1.0 = no shift at all, so the default path is bit-identical to the unmodified SDK.
+        // MONOCULAR (SIMULATION) has no stereo pair to adjust and is left untouched.
+        if (current.ipdScale != 1.0f) {
+            val eyeSign = when (eye.getEyeType()) {
+                CardboardView.Eye.LEFT -> 1f
+                CardboardView.Eye.RIGHT -> -1f
+                else -> 0f
+            }
+            VrMatrix4.applyIpdShiftInto(mvpMatrix, current.ipdScale, eyeSign)
+        }
 
         // 360° background sphere: drawn FIRST so the flat cinema panel overdraws its centre.
         drawBackground(current)
