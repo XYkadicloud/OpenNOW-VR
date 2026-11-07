@@ -78,6 +78,11 @@ class VrTheaterView(context: Context) : CardboardView(context) {
         }
     }
 
+    /** Recenter head tracking: current head orientation becomes the new "forward". */
+    fun recenter() {
+        theaterRenderer.recenter()
+    }
+
     fun applySettings(value: VrSettings) {
         theaterRenderer.applySettings(value)
         val wantStereo = value.viewerMode == VrViewerMode.CARDBOARD

@@ -45,11 +45,14 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_R1))
     }
 
+    /** START+SELECT is reserved for the menu long-press; it must NOT exit VR any more. */
     @Test
-    fun selectPlusStartComboAlsoTogglesVr() {
-        val r = VrGamepadRouter()
-        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT))
-        assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_START))
+    fun startSelectDoesNotToggleVrButLongPressOpensMenu() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true }
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1200L))
+        assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_START, 1600L))
     }
 
     @Test
@@ -72,12 +75,32 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_B))
     }
 
-    /** SELECT/START close the panel when it is already open (single press). */
+    /** HOME/MODE also opens the menu only after a long press, never on a short tap. */
+    @Test
+    fun homeKeyRequiresLongPress() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true }
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 1000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_MODE, 1100L))
+        // Hold again: first repeat starts the timer, 500 ms later it fires exactly once.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 2000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 2100L))
+        assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_MODE, 2600L))
+        // Key-repeat after firing must not toggle the menu back closed.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 3200L))
+        // Releasing clears the latch, so a fresh long press can toggle again.
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_MODE, 3300L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 4000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 4100L))
+        assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_MODE, 4600L))
+    }
+
+    /** SELECT/START/MODE close the panel when it is already open (single press). */
     @Test
     fun menuKeyClosesThePanelWhenItIsAlreadyOpen() {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_SELECT))
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_START))
+        assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_MODE))
     }
 
     /** The L1+R1 toggle combo is disabled while the menu is open (shoulders are fast-adjust there). */

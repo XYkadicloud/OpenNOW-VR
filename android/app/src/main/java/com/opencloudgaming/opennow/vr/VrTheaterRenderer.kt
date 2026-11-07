@@ -38,9 +38,10 @@ import kotlin.math.max
  *    Zero-copy: the video never passes through a Bitmap or a second render target.
  *  - Without a stream: a 2D Canvas panel (GL_TEXTURE_2D) shows status and gamepad hints, so
  *    entering VR is never a blank screen.
- *  - When the gamepad opens the settings menu (SELECT/START), the SAME quad shows a Canvas-drawn
- *    two-column menu driven exclusively by VrGamepadRouter commands. It is not a persistent
- *    overlay: it appears only while the user holds it open and disappears on B / SELECT.
+ *  - When the gamepad opens the settings menu (long-press START+SELECT or HOME/MODE), the SAME
+ *    quad shows a Canvas-drawn two-column menu driven exclusively by VrGamepadRouter commands.
+ *    It is not a persistent overlay: it appears only while the user holds it open and disappears
+ *    on B / SELECT / START / MODE.
  *  - Both eyes sample the SAME quad and the SAME texture. This is a virtual cinema screen, NOT
  *    stereoscopic 3D video. No SBS, no parallax, no per-eye content.
  *
@@ -586,7 +587,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
                 if (s.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"),
             28f, 274f, body,
         )
-        canvas.drawText("手柄 长按 START+SELECT：打开设置", 28f, 344f, hint)
+        canvas.drawText("手柄 长按 START+SELECT 或 HOME：打开设置", 28f, 344f, hint)
         canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
         canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
         // NOTE: the centre alignment line is deliberately NOT drawn on this panel Canvas. It used

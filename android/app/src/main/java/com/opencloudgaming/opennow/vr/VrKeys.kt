@@ -37,18 +37,21 @@ object VrKeys {
     const val AXIS_X = 0
     const val AXIS_Y = 1
 
-    /** Both pairs toggle VR mode on/off. Held together, not a sequence. */
+    /** Only L1+R1 toggles VR mode on/off. START+SELECT is reserved for the menu long-press. */
     val VR_TOGGLE_COMBOS = listOf(
         intArrayOf(BUTTON_L1, BUTTON_R1),
-        intArrayOf(BUTTON_SELECT, BUTTON_START),
     )
 
-    /** Opens/closes the in-VR settings panel: long-press START+SELECT together. */
-    val MENU_KEYS = intArrayOf(BUTTON_MODE)
-
-    /** Long-press combo for menu: both START and SELECT held for MENU_LONG_PRESS_MS. */
+    /**
+     * Long-press triggers for the in-VR settings panel (hold >= MENU_LONG_PRESS_MS):
+     * START+SELECT together, OR the HOME/MODE key alone. A short press of any of these is passed
+     * straight through to the game so a stray tap cannot open the panel.
+     */
     val MENU_LONG_PRESS_COMBO = intArrayOf(BUTTON_START, BUTTON_SELECT)
     const val MENU_LONG_PRESS_MS = 500L
+
+    /** Single press closes the panel while it is open. */
+    val MENU_CLOSE_KEYS = intArrayOf(BUTTON_SELECT, BUTTON_START, BUTTON_MODE)
 
     val FAST_ADJUST_KEYS = intArrayOf(BUTTON_L1, BUTTON_R1, BUTTON_L2, BUTTON_R2)
 }

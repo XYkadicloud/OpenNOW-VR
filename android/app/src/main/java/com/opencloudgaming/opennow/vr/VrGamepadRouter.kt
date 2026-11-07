@@ -24,9 +24,11 @@ sealed class VrCommand {
  *
  * Design rules (from the user, do not "improve" these):
  *  - No gaze / eye / dwell / head-gesture activation of any kind. Head pose is view-only.
- *  - When the settings panel is closed, every key except the VR toggle combo and the menu key is
- *    passed straight through to the game, so existing controller behaviour is unchanged.
- *  - When the panel is open, D-pad / shoulder / face buttons / left stick drive the panel only.
+ *  - L1+R1 toggles VR on/off. START+SELECT and HOME/MODE are NOT single-press shortcuts: the
+ *    settings panel opens only after a LONG PRESS (>= VrKeys.MENU_LONG_PRESS_MS) so a stray tap
+ *    in game can never open it. Short presses pass straight through to the game unchanged.
+ *  - When the panel is open, D-pad / shoulder / face buttons / left stick drive the panel only,
+ *    and a single press of B / SELECT / START / MODE closes it.
  *
  * No Android framework types are used here; VrKeys holds plain Int constants so JVM unit tests run
  * without Robolectric or mocked Android stubs.
@@ -41,15 +43,18 @@ class VrGamepadRouter {
     private var comboFired = false
     private var lastAxisMs = Long.MIN_VALUE
     private var lastKeyRepeatMs = Long.MIN_VALUE
-    /** Time when both START+SELECT were first held together. Long.MIN_VALUE = not currently held. */
-    private var menuComboStartMs = Long.MIN_VALUE
+    /** Time when a menu long-press hold began. Long.MIN_VALUE = no hold in progress. */
+    private var menuHoldStartMs = Long.MIN_VALUE
+    /** Latches once a long-press fired, until the hold is released, so repeats cannot re-toggle. */
+    private var menuHoldFired = false
 
     fun reset() {
         pressed.clear()
         comboFired = false
         lastAxisMs = Long.MIN_VALUE
         lastKeyRepeatMs = Long.MIN_VALUE
-        menuComboStartMs = Long.MIN_VALUE
+        menuHoldStartMs = Long.MIN_VALUE
+        menuHoldFired = false
     }
 
     fun onKey(keyCode: Int, action: Int, isGamepad: Boolean, timeMs: Long = 0L): VrCommand {
@@ -58,16 +63,15 @@ class VrGamepadRouter {
             pressed.remove(keyCode)
             lastKeyRepeatMs = Long.MIN_VALUE
             if (!comboPressed()) comboFired = false
-            // If the menu long-press combo is broken before firing, reset its timer.
-            if (!menuComboPressed()) menuComboStartMs = Long.MIN_VALUE
+            // Releasing any key of the hold cancels the timer and clears the latch, so the user
+            // must deliberately press-and-hold again to toggle the menu a second time.
+            if (!menuHoldActive()) clearMenuHold()
             return if (menuOpen) VrCommand.Consumed else VrCommand.PassThrough
         }
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
 
         val alreadyDown = !pressed.add(keyCode)
-        // While the menu is open every button belongs to the panel. SELECT/START are also part
-        // of the VR-toggle combo, so checking the combo here would exit VR (or swallow the key)
-        // when the user simply wants to close the panel. The combo stays active outside the menu.
+        // L1+R1 toggles VR. It is disabled while the menu is open (shoulders are fast-adjust there).
         if (!menuOpen && comboPressed()) {
             if (!comboFired) {
                 comboFired = true
@@ -75,19 +79,22 @@ class VrGamepadRouter {
             }
             return VrCommand.Consumed
         }
-        // The OS repeats ACTION_DOWN while a key is held. Outside the menu that repeat must not be
-        // consumed (the game may use it), so the original pass-through behaviour is unchanged.
+        // The OS repeats ACTION_DOWN while a key is held. Outside the menu those repeats must stay
+        // pass-through so the game keeps its original behaviour; we only watch them for the
+        // long-press timer (START+SELECT together, or HOME/MODE alone).
         if (alreadyDown) {
             if (!menuOpen) {
-                // Track long-press START+SELECT for menu toggle.
-                if (menuComboPressed()) {
-                    if (menuComboStartMs == Long.MIN_VALUE) menuComboStartMs = timeMs
-                    else if (timeMs - menuComboStartMs >= VrKeys.MENU_LONG_PRESS_MS) {
-                        menuComboStartMs = Long.MIN_VALUE
+                if (vrEnabled && menuHoldActive()) {
+                    if (menuHoldStartMs == Long.MIN_VALUE) {
+                        menuHoldStartMs = timeMs
+                    } else if (!menuHoldFired &&
+                        timeMs - menuHoldStartMs >= VrKeys.MENU_LONG_PRESS_MS
+                    ) {
+                        menuHoldFired = true
                         return VrCommand.ToggleMenu
                     }
                 } else {
-                    menuComboStartMs = Long.MIN_VALUE
+                    clearMenuHold()
                 }
                 return VrCommand.PassThrough
             }
@@ -104,7 +111,7 @@ class VrGamepadRouter {
 
         lastKeyRepeatMs = Long.MIN_VALUE
         if (menuOpen) return menuKey(keyCode)
-        if (vrEnabled && VrKeys.MENU_KEYS.contains(keyCode)) return VrCommand.ToggleMenu
+        // No single key opens the menu. The long-press timer starts on the first OS key-repeat.
         return VrCommand.PassThrough
     }
 
@@ -135,10 +142,9 @@ class VrGamepadRouter {
         VrKeys.DPAD_LEFT -> VrCommand.Adjust(-fastMultiplier())
         VrKeys.DPAD_RIGHT -> VrCommand.Adjust(fastMultiplier())
         VrKeys.BUTTON_A, VrKeys.DPAD_CENTER -> VrCommand.Confirm
+        // B, SELECT, START and MODE all close the panel so a user without a B button is not trapped.
         VrKeys.BUTTON_B -> VrCommand.CloseMenu
-        // SELECT/START opens the menu; pressing it again must close it, otherwise a user without
-        // a B button would be trapped in the panel.
-        in VrKeys.MENU_KEYS -> VrCommand.CloseMenu
+        in VrKeys.MENU_CLOSE_KEYS -> VrCommand.CloseMenu
         else -> VrCommand.Consumed
     }
 
@@ -149,10 +155,16 @@ class VrGamepadRouter {
         pressed.contains(a) && pressed.contains(b)
     }
 
-    /** True if both START and SELECT are currently held (for long-press menu toggle). */
-    private fun menuComboPressed(): Boolean {
+    /** True while START+SELECT are both held, OR the HOME/MODE key is held. */
+    private fun menuHoldActive(): Boolean {
         val combo = VrKeys.MENU_LONG_PRESS_COMBO
-        return pressed.contains(combo[0]) && pressed.contains(combo[1])
+        val bothHeld = pressed.contains(combo[0]) && pressed.contains(combo[1])
+        return bothHeld || pressed.contains(VrKeys.BUTTON_MODE)
+    }
+
+    private fun clearMenuHold() {
+        menuHoldStartMs = Long.MIN_VALUE
+        menuHoldFired = false
     }
 
     private companion object {
