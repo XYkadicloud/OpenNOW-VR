@@ -33,6 +33,10 @@ object VrRanges {
     const val DEAD_ZONE_MAX = 0.5f
     const val DEAD_ZONE_STEP = 0.05f
 
+    const val BACKGROUND_BRIGHTNESS_MIN = 0.2f
+    const val BACKGROUND_BRIGHTNESS_MAX = 1.5f
+    const val BACKGROUND_BRIGHTNESS_STEP = 0.05f
+
     const val REPEAT_MIN_MS = 60L
     const val REPEAT_MAX_MS = 500L
     const val REPEAT_STEP_MS = 20L
@@ -62,6 +66,14 @@ data class VrSettings(
     /** When true, mirrors the video horizontally (left-right flip).
      *  Controllable via VR settings; no shader source change required. */
     val horizontalMirror: Boolean = false,
+    /** When true, draws a 360° (equirectangular) image as the VR environment behind the screen.
+     *  Off by default to keep the original pure-black behaviour and the low-end perf budget. */
+    val backgroundEnabled: Boolean = false,
+    /** Content URI or file path of the user-imported 360° image. Empty = built-in procedural
+     *  starfield, so the background always shows something when enabled (no asset required). */
+    val backgroundImageUri: String = "",
+    /** Independent brightness for the 360° background only (the screen keeps its own brightness). */
+    val backgroundBrightness: Float = 1.0f,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -79,6 +91,11 @@ data class VrSettings(
         menuRepeatMs = menuRepeatMs.coerceIn(VrRanges.REPEAT_MIN_MS, VrRanges.REPEAT_MAX_MS),
         showCenterAlignmentLine = showCenterAlignmentLine,
         horizontalMirror = horizontalMirror,
+        backgroundEnabled = backgroundEnabled,
+        backgroundImageUri = backgroundImageUri,
+        backgroundBrightness = backgroundBrightness.coerceIn(
+            VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
+        ),
     )
 
     companion object {

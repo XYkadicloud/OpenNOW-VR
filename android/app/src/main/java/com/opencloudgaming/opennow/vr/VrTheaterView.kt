@@ -42,7 +42,7 @@ import com.google.cardboard.sdk.CardboardView
 class VrTheaterView(context: Context) : CardboardView(context) {
     companion object { private const val TAG = "VrTheaterView" }
 
-    private val theaterRenderer = VrTheaterRenderer()
+    private val theaterRenderer = VrTheaterRenderer(context)
 
     init {
         Log.d(TAG, "init: constructing VrTheaterView; childCount=$childCount")

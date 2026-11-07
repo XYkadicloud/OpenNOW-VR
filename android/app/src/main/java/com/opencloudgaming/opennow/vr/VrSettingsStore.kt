@@ -21,6 +21,9 @@ class VrSettingsStore(context: Context) {
         gamepadDeadZone = prefs.getFloat(K_DEAD_ZONE, VrSettings.DEFAULT.gamepadDeadZone),
         menuRepeatMs = prefs.getLong(K_REPEAT, VrSettings.DEFAULT.menuRepeatMs),
         showStatus = prefs.getBoolean(K_STATUS, VrSettings.DEFAULT.showStatus),
+        backgroundEnabled = prefs.getBoolean(K_BG_ENABLED, VrSettings.DEFAULT.backgroundEnabled),
+        backgroundImageUri = prefs.getString(K_BG_URI, VrSettings.DEFAULT.backgroundImageUri) ?: "",
+        backgroundBrightness = prefs.getFloat(K_BG_BRIGHT, VrSettings.DEFAULT.backgroundBrightness),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -37,6 +40,9 @@ class VrSettingsStore(context: Context) {
             .putFloat(K_DEAD_ZONE, s.gamepadDeadZone)
             .putLong(K_REPEAT, s.menuRepeatMs)
             .putBoolean(K_STATUS, s.showStatus)
+            .putBoolean(K_BG_ENABLED, s.backgroundEnabled)
+            .putString(K_BG_URI, s.backgroundImageUri)
+            .putFloat(K_BG_BRIGHT, s.backgroundBrightness)
             .apply()
     }
 
@@ -52,5 +58,8 @@ class VrSettingsStore(context: Context) {
         const val K_DEAD_ZONE = "gamepadDeadZone"
         const val K_REPEAT = "menuRepeatMs"
         const val K_STATUS = "showStatus"
+        const val K_BG_ENABLED = "backgroundEnabled"
+        const val K_BG_URI = "backgroundImageUri"
+        const val K_BG_BRIGHT = "backgroundBrightness"
     }
 }

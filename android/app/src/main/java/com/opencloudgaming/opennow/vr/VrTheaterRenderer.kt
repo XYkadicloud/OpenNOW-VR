@@ -1,12 +1,17 @@
 package com.opencloudgaming.opennow.vr
 
+import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
+import android.net.Uri
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
@@ -19,7 +24,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.Locale
+import java.util.Random
 import javax.microedition.khronos.egl.EGLConfig
+import kotlin.math.max
 
 /**
  * Renders the "half VR" theatre on CardboardView.Renderer.
@@ -65,7 +72,7 @@ import javax.microedition.khronos.egl.EGLConfig
  *
  * All in-VR control remains physical gamepad input. No gaze / eye / dwell / reticle logic exists.
  */
-class VrTheaterRenderer : CardboardView.Renderer {
+class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     private class ProgramHandles(
         val program: Int,
@@ -85,6 +92,14 @@ class VrTheaterRenderer : CardboardView.Renderer {
     private var videoTextureId = 0
     private var videoSurfaceTexture: SurfaceTexture? = null
     private var videoSurface: Surface? = null
+
+    // 360° background sphere state (see buildBackgroundMesh / drawBackground).
+    private var bgPositionBuffer: FloatBuffer? = null
+    private var bgTexCoordBuffer: FloatBuffer? = null
+    private var bgVertexCount = 0
+    private var bgTextureId = 0
+    private var bgReady = false
+    @Volatile private var bgDirty = true
 
     @Volatile private var hasVideoFrame = false
     @Volatile private var panelDirty = true
@@ -130,17 +145,24 @@ class VrTheaterRenderer : CardboardView.Renderer {
     private val texCoordBuffer: FloatBuffer = newFloatBuffer(MAX_VERTICES * 2)
 
     fun applySettings(value: VrSettings) {
+        val prev = settings
         val next = value.sanitized()
-        val geometryChanged = next.screenScale != settings.screenScale ||
-            next.screenDistanceMeters != settings.screenDistanceMeters ||
-            next.screenVerticalOffset != settings.screenVerticalOffset ||
-            next.curvature != settings.curvature
-        val panelChanged = next != settings
+        val geometryChanged = next.screenScale != prev.screenScale ||
+            next.screenDistanceMeters != prev.screenDistanceMeters ||
+            next.screenVerticalOffset != prev.screenVerticalOffset ||
+            next.curvature != prev.curvature
+        val panelChanged = next != prev
         settings = next
         // Geometry buffers are only touched on the GL thread (see onDrawEye); applySettings runs
         // on the main thread, so it just raises a flag instead of rebuilding in place.
         if (geometryChanged) meshDirty = true
         if (panelChanged) panelDirty = true
+        // Background: only raise a flag. applySettings runs on the MAIN thread; the GL texture
+        // (re)load and release MUST happen on the GL thread, so drawBackground() owns all GL work.
+        val bgChanged = next.backgroundEnabled != prev.backgroundEnabled ||
+            next.backgroundImageUri != prev.backgroundImageUri ||
+            next.backgroundBrightness != prev.backgroundBrightness
+        if (bgChanged) bgDirty = true
     }
 
     override fun onSurfaceCreated(config: EGLConfig) {
@@ -167,6 +189,7 @@ class VrTheaterRenderer : CardboardView.Renderer {
         panelTextureId = createPanelResources()
         setupVideoTexture()
         rebuildMesh()
+        buildBackgroundMesh()
         meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
         uploadPanel()
@@ -249,6 +272,19 @@ class VrTheaterRenderer : CardboardView.Renderer {
             forcePanelUpload = false
         }
 
+        // Compute the per-eye MVP first so the optional 360° background sphere (drawn next, before
+        // the flat panel) shares the identical view/projection and tracks head rotation.
+        val head = if (current.headTrackingEnabled) {
+            VrHeadPose.viewRotationInto(headRotation, headQuaternion, current.headTrackingSensitivity)
+        } else {
+            identityMatrix
+        }
+        VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
+        VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
+
+        // 360° background sphere: drawn FIRST so the flat cinema panel overdraws its centre.
+        drawBackground(current)
+
         // The three original early-returns are preserved in their original order; each also logs
         // the exact reason the eye draws NOTHING, but only at the state edge so a healthy render
         // loop stays log-silent.
@@ -288,14 +324,7 @@ class VrTheaterRenderer : CardboardView.Renderer {
         // Use the INVERSE head rotation for the view matrix, matching the SDK's
         // HeadTransform.getHeadView() / Eye.applyHeadView(). The forward rotation would make the
         // screen follow the head (no spatial depth); the inverse keeps it anchored in the world.
-        val head = if (current.headTrackingEnabled) {
-            VrHeadPose.viewRotationInto(headRotation, headQuaternion, current.headTrackingSensitivity)
-        } else {
-            identityMatrix
-        }
-        VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
-        VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
-
+        // mvpMatrix was already computed above (before the 360° background draw) and is reused.
         GLES20.glUseProgram(handles.program)
         GLES20.glUniformMatrix4fv(handles.mvp, 1, false, mvpMatrix, 0)
         GLES20.glUniform1f(handles.brightness, current.brightness)
@@ -338,6 +367,11 @@ if (useVideo) {
         Log.d(TAG, "onRendererShutdown: releasing GL resources")
         VrVideoSurfaceRegistry.clear()
         releaseVideoTexture()
+        deleteBackgroundTexture()
+        bgPositionBuffer = null
+        bgTexCoordBuffer = null
+        bgVertexCount = 0
+        bgDirty = true
         if (panelTextureId != 0) {
             GLES20.glDeleteTextures(1, intArrayOf(panelTextureId), 0)
             panelTextureId = 0
@@ -537,9 +571,9 @@ if (useVideo) {
             val column = if (index < MENU_ROWS_PER_COLUMN) 0 else 1
             val row = index % MENU_ROWS_PER_COLUMN
             val left = if (column == 0) 24f else 396f
-            val baseline = 102f + row * MENU_ROW_HEIGHT
+            val baseline = 96f + row * MENU_ROW_HEIGHT
             if (index == selected) {
-                rect.set(left - 4f, baseline - 28f, left + 336f, baseline + 9f)
+                rect.set(left - 4f, baseline - 26f, left + 336f, baseline + 8f)
                 canvas.drawRoundRect(rect, 6f, 6f, highlight)
             }
             val textColor = if (index == selected) Color.WHITE else Color.rgb(205, 218, 232)
@@ -572,6 +606,212 @@ if (useVideo) {
         vertexCount = mesh.vertexCount
     }
 
+    // -----------------------------------------------------------------------------------------
+    // 360° equirectangular background (optional, default OFF).
+    //
+    // A low-poly sphere centred on the camera is drawn BEFORE the flat cinema panel. Both are
+    // opaque and there is NO depth test, so draw order alone decides: the panel overdraws the
+    // centre of the sphere and the sphere only shows around the edges. This keeps the zero-copy
+    // video path untouched (the video still uses GL_TEXTURE_EXTERNAL_OES on its own quad) and
+    // adds just one extra textured draw when the user enables it.
+    // -----------------------------------------------------------------------------------------
+    private fun buildBackgroundMesh() {
+        val stacks = 16
+        val slices = 24
+        val radius = 10f
+        val vertices = stacks * slices * 6
+        val positions = FloatArray(vertices * 3)
+        val texCoords = FloatArray(vertices * 2)
+        var v = 0
+        val stackCount = stacks.toDouble()
+        val sliceCount = slices.toDouble()
+        for (i in 0 until stacks) {
+            val phi0 = Math.PI * i.toDouble() / stackCount
+            val phi1 = Math.PI * (i + 1).toDouble() / stackCount
+            val v0 = i.toFloat() / stacks.toFloat()
+            val v1 = (i + 1).toFloat() / stacks.toFloat()
+            for (j in 0 until slices) {
+                val theta0 = 2.0 * Math.PI * j.toDouble() / sliceCount
+                val theta1 = 2.0 * Math.PI * (j + 1).toDouble() / sliceCount
+                val u0 = j.toFloat() / slices.toFloat()
+                val u1 = (j + 1).toFloat() / slices.toFloat()
+                // Quad (phi0,theta0)-(phi0,theta1)-(phi1,theta1)-(phi1,theta0) as two triangles.
+                v = sphereVertex(positions, texCoords, v, phi0, theta0, radius, u0, v0)
+                v = sphereVertex(positions, texCoords, v, phi0, theta1, radius, u1, v0)
+                v = sphereVertex(positions, texCoords, v, phi1, theta1, radius, u1, v1)
+                v = sphereVertex(positions, texCoords, v, phi0, theta0, radius, u0, v0)
+                v = sphereVertex(positions, texCoords, v, phi1, theta1, radius, u1, v1)
+                v = sphereVertex(positions, texCoords, v, phi1, theta0, radius, u0, v1)
+            }
+        }
+        bgPositionBuffer = newFloatBuffer(positions.size).apply {
+            put(positions)
+            position(0)
+        }
+        bgTexCoordBuffer = newFloatBuffer(texCoords.size).apply {
+            put(texCoords)
+            position(0)
+        }
+        bgVertexCount = vertices
+        Log.d(TAG, "buildBackgroundMesh: sphere vertices=$bgVertexCount radius=$radius")
+    }
+
+    /** Writes one sphere vertex (equirectangular UV) and returns the next vertex index. */
+    private fun sphereVertex(
+        positions: FloatArray,
+        texCoords: FloatArray,
+        index: Int,
+        phi: Double,
+        theta: Double,
+        radius: Float,
+        u: Float,
+        vCoord: Float,
+    ): Int {
+        val sinPhi = Math.sin(phi)
+        val r = radius.toDouble()
+        val o = index * 3
+        positions[o] = (r * sinPhi * Math.cos(theta)).toFloat()
+        positions[o + 1] = (r * Math.cos(phi)).toFloat()
+        positions[o + 2] = (r * sinPhi * Math.sin(theta)).toFloat()
+        val t = index * 2
+        texCoords[t] = u
+        texCoords[t + 1] = vCoord
+        return index + 1
+    }
+
+    /**
+     * Draws the 360° sphere using the panel program (uFlip=0). Runs on the GL thread, so it also
+     * owns releasing the texture when the user switches the feature off (no GL calls off-thread).
+     */
+    private fun drawBackground(s: VrSettings) {
+        if (!s.backgroundEnabled) {
+            if (bgTextureId != 0) deleteBackgroundTexture()
+            return
+        }
+        val prog = panel ?: return
+        val posBuf = bgPositionBuffer ?: return
+        val texBuf = bgTexCoordBuffer ?: return
+        if (bgVertexCount == 0) return
+        if (bgDirty || bgTextureId == 0) {
+            ensureBackgroundTexture()
+            bgDirty = false
+        }
+        if (!bgReady) return
+
+        GLES20.glUseProgram(prog.program)
+        GLES20.glUniformMatrix4fv(prog.mvp, 1, false, mvpMatrix, 0)
+        GLES20.glUniform1f(prog.brightness, s.backgroundBrightness)
+        GLES20.glUniform1f(prog.flip, 0f)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform1i(prog.texture, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgTextureId)
+
+        posBuf.position(0)
+        GLES20.glEnableVertexAttribArray(prog.position)
+        GLES20.glVertexAttribPointer(prog.position, 3, GLES20.GL_FLOAT, false, 12, posBuf)
+        texBuf.position(0)
+        GLES20.glEnableVertexAttribArray(prog.texCoord)
+        GLES20.glVertexAttribPointer(prog.texCoord, 2, GLES20.GL_FLOAT, false, 8, texBuf)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, bgVertexCount)
+        GLES20.glDisableVertexAttribArray(prog.position)
+        GLES20.glDisableVertexAttribArray(prog.texCoord)
+    }
+
+    /** Creates / refreshes the GL_TEXTURE_2D holding the (optionally user-imported) panorama. */
+    private fun ensureBackgroundTexture() {
+        if (bgTextureId == 0) {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            bgTextureId = ids[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgTextureId)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        }
+        val source = loadBackgroundBitmap() ?: return
+        // Downscale huge panoramas so a 4096x2048 image does not eat ~32 MB of VRAM on a Helio P60.
+        val maxWidth = 2048
+        val bitmap = if (source.width > maxWidth) {
+            val h = max(1, source.height * maxWidth / source.width)
+            Bitmap.createScaledBitmap(source, maxWidth, h, true)
+        } else {
+            source
+        }
+        val uploadedW = bitmap.width
+        val uploadedH = bitmap.height
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgTextureId)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        if (bitmap !== source) bitmap.recycle()
+        source.recycle()
+        bgReady = true
+        Log.d(TAG, "ensureBackgroundTexture: uploaded ${uploadedW}x${uploadedH}, id=$bgTextureId")
+    }
+
+    /**
+     * Decodes the user-imported image (content:// URI, file:// URI or plain absolute path).
+     * Falls back to a built-in procedural starfield so the background is never blank and needs
+     * NO bundled asset — importing is entirely optional.
+     */
+    private fun loadBackgroundBitmap(): Bitmap? {
+        val path = settings.backgroundImageUri
+        if (path.isNotEmpty()) {
+            val decoded = runCatching {
+                if (path.startsWith("content://") || path.startsWith("file://")) {
+                    context.contentResolver.openInputStream(Uri.parse(path))
+                        ?.use { BitmapFactory.decodeStream(it) }
+                } else {
+                    BitmapFactory.decodeFile(path)
+                }
+            }.getOrElse {
+                Log.w(TAG, "loadBackgroundBitmap: cannot decode '$path'", it)
+                null
+            }
+            if (decoded != null) return decoded
+            Log.w(TAG, "loadBackgroundBitmap: '$path' produced no bitmap; using procedural backdrop")
+        }
+        return createProceduralBackdrop()
+    }
+
+    /** Deterministic dark-blue gradient + stars, drawn once into a 2:1 equirectangular bitmap. */
+    private fun createProceduralBackdrop(): Bitmap {
+        val w = 1024
+        val h = 512
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val gradient = LinearGradient(
+            0f, 0f, 0f, h.toFloat(),
+            Color.rgb(14, 20, 42), Color.rgb(2, 3, 8), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), Paint().apply { shader = gradient })
+        val star = Paint().apply { color = Color.argb(190, 210, 225, 255) }
+        val random = Random(20261107L)
+        repeat(240) {
+            canvas.drawCircle(
+                random.nextFloat() * w.toFloat(),
+                random.nextFloat() * h.toFloat(),
+                0.6f + random.nextFloat() * 1.3f,
+                star,
+            )
+        }
+        // Faint horizon: gives both eyes a common reference so stereo alignment is easy to judge.
+        val horizon = Paint().apply {
+            color = Color.argb(45, 120, 165, 225)
+            strokeWidth = 2f
+        }
+        canvas.drawLine(0f, h.toFloat() / 2f, w.toFloat(), h.toFloat() / 2f, horizon)
+        return bitmap
+    }
+
+    /** Frees the panorama texture; called when the feature is switched off or the GL surface dies. */
+    private fun deleteBackgroundTexture() {
+        if (bgTextureId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(bgTextureId), 0)
+            bgTextureId = 0
+        }
+        bgReady = false
+    }
+
     private companion object {
         const val TAG = "VrTheaterRenderer"
         /** One heartbeat line per this many onDrawEye calls (both eyes share one counter). */
@@ -580,8 +820,10 @@ if (useVideo) {
         const val PANEL_W = 768
         const val PANEL_H = 432
         const val MENU_ASPECT = 16f / 9f
-        const val MENU_ROWS_PER_COLUMN = 7
-        const val MENU_ROW_HEIGHT = 44f
+        // 18 rows fit in two columns of 9; 34px rows keep the last baseline (368) clear of the
+        // bottom hint (408) on the 432px-tall panel.
+        const val MENU_ROWS_PER_COLUMN = 9
+        const val MENU_ROW_HEIGHT = 34f
 
         /**
          * VrScreenGeometry emits top v=0 / bottom v=1. GLUtils uploads the bitmap's first row at

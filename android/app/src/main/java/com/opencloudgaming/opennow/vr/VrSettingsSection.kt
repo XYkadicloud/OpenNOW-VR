@@ -1,5 +1,8 @@
 package com.opencloudgaming.opennow.vr
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -9,6 +12,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.opencloudgaming.opennow.NumberSlider
@@ -30,6 +34,23 @@ import com.opencloudgaming.opennow.SettingSwitch
 fun VrSettingsSection() {
     val settings by VrSession.settings.collectAsStateWithLifecycle()
     val enabled by VrSession.enabled.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // ACTION_OPEN_DOCUMENT + takePersistableUriPermission keeps the imported panorama readable
+    // across app restarts (the URI is persisted in SharedPreferences via VrSession.updateSettings).
+    val pickPanorama = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            VrSession.updateSettings(
+                VrSession.settings.value.copy(backgroundImageUri = uri.toString()),
+            )
+        }
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SettingSwitch(
@@ -76,11 +97,50 @@ fun VrSettingsSection() {
             VrSession.updateSettings(settings.copy(showStatus = checked))
         }
 
+        SettingSwitch(
+            label = "串流画面左右镜像",
+            checked = settings.horizontalMirror,
+            description = "串流画面左右颠倒时打开。纯设置项，随时可关回；不改渲染管线。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(horizontalMirror = checked))
+        }
+        SettingSwitch(
+            label = "中心对齐辅助线",
+            checked = settings.showCenterAlignmentLine,
+            description = "在幕布正中画一条从下到中心的竖线，用来确认左右眼是否正常立体显示。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(showCenterAlignmentLine = checked))
+        }
+
+        SettingSwitch(
+            label = "360° 背景图（VR 环境）",
+            checked = settings.backgroundEnabled,
+            description = "在纯黑背景之外叠加一张全景图作为 VR 环境。默认关闭；关闭时完全不占用额外显存与绘制。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(backgroundEnabled = checked))
+        }
+        NumberSlider(
+            label = "背景亮度",
+            value = settings.backgroundBrightness,
+            min = VrRanges.BACKGROUND_BRIGHTNESS_MIN,
+            max = VrRanges.BACKGROUND_BRIGHTNESS_MAX,
+            step = VrRanges.BACKGROUND_BRIGHTNESS_STEP,
+            unit = null,
+        ) { value ->
+            VrSession.updateSettings(settings.copy(backgroundBrightness = value))
+        }
+        TextButton(onClick = { pickPanorama.launch(arrayOf("image/*")) }) {
+            Text("导入 360° 全景图（推荐 2:1 等距圆柱图片）")
+        }
+        TextButton(onClick = { VrSession.updateSettings(settings.copy(backgroundImageUri = "")) }) {
+            Text("清除已导入图片，改用内置星空")
+        }
+
         TextButton(onClick = { VrSession.updateSettings(VrSettings.DEFAULT) }) {
             Text("恢复默认")
         }
         Text(
-            text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）；黑色背景不渲染 3D 场景。",
+            text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）；360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),
         )

@@ -15,6 +15,10 @@ enum class VrMenuItemId {
     GAMEPAD_DEAD_ZONE,
     MENU_REPEAT,
     SHOW_STATUS,
+    HORIZONTAL_MIRROR,
+    CENTER_ALIGN_LINE,
+    BACKGROUND,
+    BACKGROUND_BRIGHTNESS,
     SCAN_QR,
     RESET_DEFAULTS,
     EXIT_VR,
@@ -52,6 +56,12 @@ object VrMenuModel {
         VrMenuItem(VrMenuItemId.MENU_REPEAT, "摇杆重复 (ms)", VrMenuItemKind.RANGE,
             VrRanges.REPEAT_MIN_MS.toFloat(), VrRanges.REPEAT_MAX_MS.toFloat(), VrRanges.REPEAT_STEP_MS.toFloat()),
         VrMenuItem(VrMenuItemId.SHOW_STATUS, "显示状态", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.HORIZONTAL_MIRROR, "串流左右镜像", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.CENTER_ALIGN_LINE, "中心辅助线", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.BACKGROUND, "360° 背景图", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
+            VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
+            VrRanges.BACKGROUND_BRIGHTNESS_STEP),
         VrMenuItem(VrMenuItemId.SCAN_QR, "纸盒扫码校准", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.RESET_DEFAULTS, "恢复默认", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.EXIT_VR, "退出 VR", VrMenuItemKind.ACTION),
@@ -69,6 +79,10 @@ object VrMenuModel {
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> settings.gamepadDeadZone
         VrMenuItemId.MENU_REPEAT -> settings.menuRepeatMs.toFloat()
         VrMenuItemId.SHOW_STATUS -> if (settings.showStatus) 1f else 0f
+        VrMenuItemId.HORIZONTAL_MIRROR -> if (settings.horizontalMirror) 1f else 0f
+        VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) 1f else 0f
+        VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) 1f else 0f
+        VrMenuItemId.BACKGROUND_BRIGHTNESS -> settings.backgroundBrightness
         else -> 0f
     }
 
@@ -84,6 +98,10 @@ object VrMenuModel {
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> String.format(Locale.US, "%.2f", settings.gamepadDeadZone)
         VrMenuItemId.MENU_REPEAT -> "${settings.menuRepeatMs} ms"
         VrMenuItemId.SHOW_STATUS -> if (settings.showStatus) "开" else "关"
+        VrMenuItemId.HORIZONTAL_MIRROR -> if (settings.horizontalMirror) "开" else "关"
+        VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) "开" else "关"
+        VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) "开" else "关"
+        VrMenuItemId.BACKGROUND_BRIGHTNESS -> String.format(Locale.US, "%.2f", settings.backgroundBrightness)
         VrMenuItemId.SCAN_QR -> "按 A 执行"
         VrMenuItemId.RESET_DEFAULTS -> "按 A 执行"
         VrMenuItemId.EXIT_VR -> "按 A 执行"
@@ -110,7 +128,9 @@ object VrMenuModel {
     fun activate(settings: VrSettings, id: VrMenuItemId): VrSettings = when (id) {
         VrMenuItemId.RESET_DEFAULTS -> VrSettings.DEFAULT
         VrMenuItemId.VIEWER_MODE -> toggle(settings, id)
-        VrMenuItemId.HEAD_TRACKING, VrMenuItemId.SHOW_STATUS -> toggle(settings, id)
+        VrMenuItemId.HEAD_TRACKING, VrMenuItemId.SHOW_STATUS,
+        VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.CENTER_ALIGN_LINE,
+        VrMenuItemId.BACKGROUND -> toggle(settings, id)
         else -> settings
     }.sanitized()
 
@@ -124,6 +144,9 @@ object VrMenuModel {
         )
         VrMenuItemId.HEAD_TRACKING -> settings.copy(headTrackingEnabled = !settings.headTrackingEnabled)
         VrMenuItemId.SHOW_STATUS -> settings.copy(showStatus = !settings.showStatus)
+        VrMenuItemId.HORIZONTAL_MIRROR -> settings.copy(horizontalMirror = !settings.horizontalMirror)
+        VrMenuItemId.CENTER_ALIGN_LINE -> settings.copy(showCenterAlignmentLine = !settings.showCenterAlignmentLine)
+        VrMenuItemId.BACKGROUND -> settings.copy(backgroundEnabled = !settings.backgroundEnabled)
         else -> settings
     }
 
@@ -136,6 +159,7 @@ object VrMenuModel {
         VrMenuItemId.HEAD_SENSITIVITY -> settings.copy(headTrackingSensitivity = value)
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> settings.copy(gamepadDeadZone = value)
         VrMenuItemId.MENU_REPEAT -> settings.copy(menuRepeatMs = value.toLong())
+        VrMenuItemId.BACKGROUND_BRIGHTNESS -> settings.copy(backgroundBrightness = value)
         else -> settings
     }
 }

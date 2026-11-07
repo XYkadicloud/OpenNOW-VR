@@ -7,8 +7,8 @@ import org.junit.Test
 class VrMenuModelTest {
 
     @Test
-    fun exposesAllFourteenRowsWithUniqueIds() {
-        assertEquals(14, VrMenuModel.items.size)
+    fun exposesAllRowsWithUniqueIds() {
+        assertEquals(18, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -76,6 +76,29 @@ class VrMenuModelTest {
     fun menuRepeatIsStoredAsLong() {
         val s = VrMenuModel.adjust(VrSettings.DEFAULT, VrMenuItemId.MENU_REPEAT, 1)
         assertEquals(VrSettings.DEFAULT.menuRepeatMs + VrRanges.REPEAT_STEP_MS, s.menuRepeatMs)
+    }
+
+    @Test
+    fun newToggleRowsFlipAndAreReversible() {
+        val s = VrSettings.DEFAULT
+        assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.HORIZONTAL_MIRROR, 1).horizontalMirror)
+        assertEquals(
+            false,
+            VrMenuModel.adjust(s.copy(horizontalMirror = true), VrMenuItemId.HORIZONTAL_MIRROR, 1)
+                .horizontalMirror,
+        )
+        assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.CENTER_ALIGN_LINE, 1).showCenterAlignmentLine)
+        assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.BACKGROUND, 1).backgroundEnabled)
+        assertEquals(false, VrMenuModel.adjust(s.copy(backgroundEnabled = true), VrMenuItemId.BACKGROUND, 1)
+            .backgroundEnabled)
+    }
+
+    @Test
+    fun backgroundBrightnessRangeIsClamped() {
+        val high = VrMenuModel.adjust(VrSettings.DEFAULT, VrMenuItemId.BACKGROUND_BRIGHTNESS, 10_000)
+        val low = VrMenuModel.adjust(VrSettings.DEFAULT, VrMenuItemId.BACKGROUND_BRIGHTNESS, -10_000)
+        assertEquals(VrRanges.BACKGROUND_BRIGHTNESS_MAX, high.backgroundBrightness, 1e-4f)
+        assertEquals(VrRanges.BACKGROUND_BRIGHTNESS_MIN, low.backgroundBrightness, 1e-4f)
     }
 
     @Test
