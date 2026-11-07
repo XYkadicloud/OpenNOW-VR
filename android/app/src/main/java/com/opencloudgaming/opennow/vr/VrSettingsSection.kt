@@ -142,6 +142,9 @@ fun VrSettingsSection() {
         TextButton(onClick = { VrSession.updateSettings(settings.copy(backgroundImageUri = "")) }) {
             Text("清除已导入图片，改用内置星空")
         }
+        TextButton(onClick = { VrSession.recenter() }) {
+            Text("重置中心点（头部追踪校准）")
+        }
 
         TextButton(onClick = { VrSession.updateSettings(VrSettings.DEFAULT) }) {
             Text("恢复默认")

@@ -8,7 +8,7 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(20, VrMenuModel.items.size)
+        assertEquals(21, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -70,6 +70,7 @@ class VrMenuModelTest {
         val s = VrSettings.DEFAULT
         assertEquals(s, VrMenuModel.activate(s, VrMenuItemId.EXIT_VR))
         assertEquals(s, VrMenuModel.activate(s, VrMenuItemId.SCAN_QR))
+        assertEquals(s, VrMenuModel.activate(s, VrMenuItemId.RECENTER))
     }
 
     @Test

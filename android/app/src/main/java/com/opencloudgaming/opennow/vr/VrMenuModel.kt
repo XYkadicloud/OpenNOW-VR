@@ -21,6 +21,7 @@ enum class VrMenuItemId {
     CENTER_ALIGN_LINE,
     BACKGROUND,
     BACKGROUND_BRIGHTNESS,
+    RECENTER,
     SCAN_QR,
     RESET_DEFAULTS,
     EXIT_VR,
@@ -67,6 +68,7 @@ object VrMenuModel {
         VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
             VrRanges.BACKGROUND_BRIGHTNESS_STEP),
+        VrMenuItem(VrMenuItemId.RECENTER, "重置中心点", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.SCAN_QR, "纸盒扫码校准", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.RESET_DEFAULTS, "恢复默认", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.EXIT_VR, "退出 VR", VrMenuItemKind.ACTION),
@@ -111,6 +113,7 @@ object VrMenuModel {
         VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) "开" else "关"
         VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) "开" else "关"
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> String.format(Locale.US, "%.2f", settings.backgroundBrightness)
+        VrMenuItemId.RECENTER -> "按 A 执行"
         VrMenuItemId.SCAN_QR -> "按 A 执行"
         VrMenuItemId.RESET_DEFAULTS -> "按 A 执行"
         VrMenuItemId.EXIT_VR -> "按 A 执行"
@@ -136,6 +139,7 @@ object VrMenuModel {
     /** ACTION rows are executed here, never from gaze, timers or head pose. */
     fun activate(settings: VrSettings, id: VrMenuItemId): VrSettings = when (id) {
         VrMenuItemId.RESET_DEFAULTS -> VrSettings.DEFAULT
+        VrMenuItemId.RECENTER -> { VrSession.recenter(); settings }
         VrMenuItemId.VIEWER_MODE -> toggle(settings, id)
         VrMenuItemId.HEAD_TRACKING, VrMenuItemId.SHOW_STATUS,
         VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.VERTICAL_FLIP,

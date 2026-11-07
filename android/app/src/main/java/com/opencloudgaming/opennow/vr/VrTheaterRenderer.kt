@@ -135,6 +135,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     // Preallocated render-loop state. Nothing below is allocated inside onDrawEye().
     private val headQuaternion = FloatArray(4).also { it[3] = 1f }
+    /** Stored center orientation for "recenter". Identity until user triggers recenter. */
+    private val centerOffsetQuaternion = FloatArray(4).also { it[3] = 1f }
     private val stMatrix = FloatArray(16).also { it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f }
     private val identityMatrix = VrMatrix4.identity()
     private val headRotation = FloatArray(16)
@@ -175,6 +177,16 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             next.backgroundImageUri != prev.backgroundImageUri ||
             next.backgroundBrightness != prev.backgroundBrightness
         if (bgChanged) bgDirty = true
+    }
+
+    /** Called from VrSession when user triggers "重置中心点". Runs on GL thread via renderer callback. */
+    fun recenter() {
+        // Capture current head orientation as the new center. Copy so we own the data.
+        centerOffsetQuaternion[0] = headQuaternion[0]
+        centerOffsetQuaternion[1] = headQuaternion[1]
+        centerOffsetQuaternion[2] = headQuaternion[2]
+        centerOffsetQuaternion[3] = headQuaternion[3]
+        Log.d(TAG, "recenter: new center offset = (${headQuaternion[0]}, ${headQuaternion[1]}, ${headQuaternion[2]}, ${headQuaternion[3]})")
     }
 
     override fun onSurfaceCreated(config: EGLConfig) {
@@ -288,7 +300,12 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // Compute the per-eye MVP first so the optional 360° background sphere (drawn next, before
         // the flat panel) shares the identical view/projection and tracks head rotation.
         val head = if (current.headTrackingEnabled) {
-            VrHeadPose.viewRotationInto(headRotation, headQuaternion, current.headTrackingSensitivity)
+            VrHeadPose.viewRotationInto(
+                headRotation,
+                headQuaternion,
+                centerOffsetQuaternion,
+                current.headTrackingSensitivity
+            )
         } else {
             identityMatrix
         }

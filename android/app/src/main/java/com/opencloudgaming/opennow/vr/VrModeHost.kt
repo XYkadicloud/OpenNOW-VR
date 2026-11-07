@@ -85,6 +85,7 @@ private fun VrTheaterHost(settings: VrSettings) {
                 holder.view = view
                 Log.d("VrModeHost", "AndroidView.factory: VrTheaterView created; attaching start-on-attach listener")
                 VrSession.onScanQr = { view.scanViewerQrCode() }
+                VrSession.onRecenter = { view.theaterRenderer.recenter() }
                 // CardboardView.onResume() must run once the GL surface is attached.
                 view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
                     override fun onViewAttachedToWindow(attached: View) {
@@ -109,6 +110,7 @@ private fun VrTheaterHost(settings: VrSettings) {
             }
             holder.view = null
             VrSession.onScanQr = null
+            VrSession.onRecenter = null
             VrSession.setMenuOpen(false)
             VrVideoSurfaceRegistry.clear()
         }

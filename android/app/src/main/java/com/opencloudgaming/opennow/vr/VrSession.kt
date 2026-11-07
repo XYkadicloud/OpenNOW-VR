@@ -45,6 +45,9 @@ object VrSession {
     /** Set by VrModeHost so the "scan Cardboard QR" menu row can reach the SDK view. */
     @Volatile var onScanQr: (() -> Unit)? = null
 
+    /** Set by VrModeHost so the VR menu can trigger head-tracking recenter. */
+    @Volatile var onRecenter: (() -> Unit)? = null
+
     private var store: VrSettingsStore? = null
     private val router = VrGamepadRouter()
 
@@ -67,6 +70,11 @@ object VrSession {
     }
 
     fun toggle() = setEnabled(!_enabled.value)
+
+    /** Triggers head-tracking recenter: current head orientation becomes the new "forward". */
+    fun recenter() {
+        onRecenter?.invoke()
+    }
 
     fun setMenuOpen(value: Boolean) {
         _menuOpen.value = value

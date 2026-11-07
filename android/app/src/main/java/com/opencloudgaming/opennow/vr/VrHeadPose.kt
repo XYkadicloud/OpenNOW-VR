@@ -35,6 +35,21 @@ object VrHeadPose {
         return VrMatrix4.transposeRotationInto(out, out)
     }
 
+    /**
+     * Computes the relative rotation from [centerQuaternion] to [currentQuaternion], applies
+     * [sensitivity], and writes the VIEW matrix (inverse of the forward rotation) into [out].
+     * This is used for "recenter" — the stored center orientation becomes the new forward.
+     */
+    fun viewRotationInto(out: FloatArray,
+                         currentQuaternion: FloatArray,
+                         centerQuaternion: FloatArray,
+                         sensitivity: Float): FloatArray {
+        // relative = inverse(center) * current  =>  current * centerConj
+        val tmp = FloatArray(4)
+        quatMultiplyConj(tmp, currentQuaternion, centerQuaternion)
+        return viewRotationInto(out, tmp, sensitivity)
+    }
+
     /** Zero-allocation variant. Writes the rotation into [out] and returns it. */
     fun scaledRotationInto(
         out: FloatArray,
@@ -70,5 +85,16 @@ object VrHeadPose {
         if (sinHalf < 1e-6f || angle < 1e-6f) return VrMatrix4.identityInto(out)
 
         return VrMatrix4.rotationInto(out, x / sinHalf, y / sinHalf, z / sinHalf, angle * sensitivity)
+    }
+
+    /** q1 * conjugate(q2) into [out] (both length-4: x,y,z,w). */
+    private fun quatMultiplyConj(out: FloatArray, q1: FloatArray, q2: FloatArray) {
+        val x1 = q1[0]; val y1 = q1[1]; val z1 = q1[2]; val w1 = q1[3]
+        val x2 = q2[0]; val y2 = q2[1]; val z2 = q2[2]; val w2 = q2[3]
+        // conjugate(q2) = (-x2, -y2, -z2, w2)
+        out[0] =  w1 * -x2 + x1 * w2 + y1 * -z2 - z1 * -y2  // w1*(-x2) + x1*w2 + y1*(-z2) - z1*(-y2)
+        out[1] =  w1 * -y2 - x1 * -z2 + y1 * w2 + z1 * -x2  // w1*(-y2) - x1*(-z2) + y1*w2 + z1*(-x2)
+        out[2] =  w1 * -z2 + x1 * -y2 - y1 * -x2 + z1 * w2  // w1*(-z2) + x1*(-y2) - y1*(-x2) + z1*w2
+        out[3] =  w1 * w2  - x1 * -x2 - y1 * -y2 - z1 * -z2  // w1*w2 - x1*(-x2) - y1*(-y2) - z1*(-z2)
     }
 }
