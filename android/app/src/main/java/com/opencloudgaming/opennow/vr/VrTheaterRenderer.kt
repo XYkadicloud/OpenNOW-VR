@@ -303,13 +303,16 @@ class VrTheaterRenderer : CardboardView.Renderer {
         GLES20.glUniform1i(handles.texture, 0)
 
 if (useVideo) {
-        // Apply horizontal mirror if setting is enabled.
+        // Apply horizontal mirror if the setting is enabled.
         // Negating stMatrix[0] (x-scale) mirrors the texture left-right.
-        // This is a pure Kotlin-side change — no GLSL shader modification required.
-        if (s.horizontalMirror) {
-            stMatrix[0] = -stMatrix[0]
-        }
+        // Pure Kotlin-side change — no GLSL shader modification required.
+        // onDrawEye runs once PER EYE, but stMatrix is recomputed each frame by onNewFrame.
+        // We restore the sign after uploading so BOTH eyes sample an identically mirrored
+        // texture (otherwise the right eye would be double-negated and stay un-mirrored).
+        val mirror = current.horizontalMirror
+        if (mirror) stMatrix[0] = -stMatrix[0]
         GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
+        if (mirror) stMatrix[0] = -stMatrix[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
         } else {
             GLES20.glUniform1f(handles.flip, PANEL_FLIP_Y)

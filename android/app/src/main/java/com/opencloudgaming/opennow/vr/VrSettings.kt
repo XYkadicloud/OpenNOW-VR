@@ -56,6 +56,9 @@ data class VrSettings(
     val gamepadDeadZone: Float = 0.20f,
     val menuRepeatMs: Long = 140L,
     val showStatus: Boolean = true,
+    /** When true, draws a single vertical center-alignment line on the status panel
+     *  (used to confirm the eyes are rendering the screen stereoscopically). Adjustable. */
+    val showCenterAlignmentLine: Boolean = false,
     /** When true, mirrors the video horizontally (left-right flip).
      *  Controllable via VR settings; no shader source change required. */
     val horizontalMirror: Boolean = false,
