@@ -10,17 +10,26 @@ import com.google.cardboard.sdk.CardboardView
  * Google Cardboard SDK view hosted inside MainActivity (NOT a separate Activity).
  * Keeping it in the same Activity preserves the existing NativeStreamInputRouter gamepad path.
  *
- * LAYERING / setZOrderOnTop — REVERTED (2026-11-06):
- *  - An earlier build (3cfcade) promoted the Cardboard GL SurfaceView with setZOrderOnTop(true)
- *    to stop the 2D stream SurfaceView from covering the VR scene. On the OPPO F9 running that
- *    build, entering VR instead showed the ORIGINAL non-VR phone UI — the VR layer did not appear
- *    at all. setZOrderOnTop makes the GL layer opaque and top-most, but it MUST be applied before
- *    the surface is created; calling it from init / onAttachedToWindow while iterating children
- *    gave no reliable result and is suspected of leaving the GL layer invisible/transparent, so
- *    the 2D UI underneath shows through. It is removed here to return to the known-good layering
- *    while the real cause is located with lifecycle logs. See docs/HANDOFF.md.
+ * LAYERING — how the VR scene wins over the 2D phone stream (2026-11-07):
+ *  - The app's 2D UI owns `StreamVideoSurface`, whose children are SurfaceViews. SurfaceView layers
+ *    are composited by SurfaceFlinger, NOT by the Compose draw order, so VrModeHost being drawn
+ *    *after* OpenNowApp does NOT put the Cardboard GL layer above the 2D stream layer. Without an
+ *    explicit promotion, the 2D stream SurfaceView stays on top and "VR" looks exactly like the
+ *    flat full-screen 2D picture (the reported bug).
+ *  - FIX: promote the Cardboard GL SurfaceView with `setZOrderOnTop(true)`. That makes the VR GL
+ *    surface the top-most surface in the window — above the 2D stream SurfaceView AND above the
+ *    Compose 2D UI — so the pure-black VR scene (black clear + flat video quad) is authoritative.
+ *  - TIMING IS THE WHOLE GAME. `setZOrderOnTop` only takes effect on the NEXT surface creation; if
+ *    it is applied AFTER the GL surface already exists it forces a surface RE-creation, which on the
+ *    OPPO F9 left the GL layer transparent (CardboardView uses RENDERMODE_WHEN_DIRTY + a Choreographer
+ *    loop, so the re-created surface never got a frame and the 2D stream showed through — this was
+ *    the 3cfcade failure). The glView SurfaceView child is `addView`'d inside CardboardView's own
+ *    constructor (CardboardView.initialize()), i.e. BEFORE VrTheaterView.init runs, but its surface
+ *    is only created later when the view is attached to the window. So we apply setZOrderOnTop(true)
+ *    ONCE, in init, and never touch it again (not in onAttachedToWindow, not on settings changes).
  *  - The 2D stream SurfaceViews are deliberately LEFT ALIVE (not hidden/GONE): hiding them would
- *    destroy their native Surface and force a decoder restart / black frame on VR exit.
+ *    destroy their native Surface and force a decoder restart / black frame on VR exit. Left alive
+ *    they simply composite behind the top-most VR GL surface, which is exactly what we want.
  *
  * The SDK 2D touch overlay (alignment marker, X / gear buttons) is hidden: this project is
  * gamepad-only, and setStereoRenderMode(true) calls showAll() on that overlay, so it is re-hidden
@@ -37,10 +46,36 @@ class VrTheaterView(context: Context) : CardboardView(context) {
 
     init {
         Log.d(TAG, "init: constructing VrTheaterView; childCount=$childCount")
+        // Promote the Cardboard GL SurfaceView ABOVE the 2D phone stream SurfaceView.
+        // SurfaceView layers are composited by SurfaceFlinger, not the Compose draw order, so
+        // without this the 2D stream SurfaceView stays on top and VR looks like the flat 2D picture.
+        // setZOrderOnTop must be applied BEFORE the GL surface is created (here, in init, long
+        // before the view is attached to the window). Re-applying it after surface creation forces
+        // a surface re-creation that left the GL layer transparent on low-end devices, so we call it
+        // exactly ONCE and never again. The glView SurfaceView child is added by CardboardView's own
+        // constructor, so it is already present here and its surface does not yet exist.
+        promoteGlSurface()
         setRenderer(theaterRenderer)
         // Headset use has no touch input to reset the screen-off timer.
         setKeepScreenOn(true)
         applySettings(VrSession.settings.value)
+    }
+
+    /**
+     * Makes the Cardboard GL SurfaceView the top-most surface in the window so the black VR scene
+     * (black clear + flat video quad) is composited above the 2D phone stream and the 2D Compose UI.
+     * Call ONLY from init, before the GL surface is created. Never re-call it (e.g. from
+     * onAttachedToWindow) — re-applying setZOrderOnTop after the surface exists forces a surface
+     * re-creation that can leave the GL layer transparent and let the 2D stream show through.
+     */
+    private fun promoteGlSurface() {
+        for (index in 0 until childCount) {
+            val child = getChildAt(index)
+            if (child is SurfaceView) {
+                child.setZOrderOnTop(true)
+                Log.d(TAG, "promoteGlSurface: setZOrderOnTop(true) on SurfaceView child #$index (${child.javaClass.simpleName})")
+            }
+        }
     }
 
     fun applySettings(value: VrSettings) {
