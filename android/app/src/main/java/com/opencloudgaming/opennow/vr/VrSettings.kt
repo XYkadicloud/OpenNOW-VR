@@ -56,6 +56,9 @@ data class VrSettings(
     val gamepadDeadZone: Float = 0.20f,
     val menuRepeatMs: Long = 140L,
     val showStatus: Boolean = true,
+    /** When true, draws a single vertical center-alignment line on the VR status panel.
+     *  Helps confirm eye position / screen centering. Can be toggled off in settings. */
+    val showCenterAlignmentLine: Boolean = false,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -71,6 +74,7 @@ data class VrSettings(
         ),
         gamepadDeadZone = gamepadDeadZone.coerceIn(VrRanges.DEAD_ZONE_MIN, VrRanges.DEAD_ZONE_MAX),
         menuRepeatMs = menuRepeatMs.coerceIn(VrRanges.REPEAT_MIN_MS, VrRanges.REPEAT_MAX_MS),
+        showCenterAlignmentLine = showCenterAlignmentLine,
     )
 
     companion object {

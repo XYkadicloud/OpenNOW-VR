@@ -163,7 +163,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | 平面 2D 幕布几何、可调项、手柄状态机、设置持久化 | 完成 | `vr/VrSettings.kt` / `VrScreenGeometry.kt` / `VrGamepadRouter.kt` 等 |
 | `MainActivity` 同 Activity overlay 接线（5 处） | 完成 | `MainActivity.kt`：`VrSession.attach`、根 `Box` 叠加 `VrModeHost()`、`dispatchKeyEvent`、`dispatchGenericMotionEvent` |
 | **电视版 UI 完全移除** | 完成 | `ConsoleHomeScreen.kt` 移到 `docs/ui-reference/*.txt`；`OpenNowScreens.kt` 的 `consoleHome` 分支、设置开关、`HomeUiState.load`、`console_home_*` 字符串全部删除；`grep` 编译路径零残留 |
-| **VR 黑底 + 2D 纹理正常渲染** | 代码完成，**真机未验证** | `vr/VrTheaterRenderer.kt`：黑底清屏色、OES 串流纹理、无流时 2D 面板 |
+| **VR 黑底 + 2D 纹理正常渲染（层级修复）** | **代码完成 + CI 验证** | `vr/VrTheaterView.kt`：`init` 中一次性 `promoteGlSurface()` 调用 `setZOrderOnTop(true)`，只在表面创建前应用一次（**不**在 `onAttachedToWindow` 重新应用），使 VR GL SurfaceView 置顶于 2D SurfaceView 之上。CI run `42322518683`（commit `b7961f6`）双 job 全绿，AAR/APK JNI 守卫 success。真机仍待 §12.6 验证。 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
 | **VR 设置集成进原生设置页** | 代码完成，**真机未验证** | `设置 → Interface → 「VR 模式（半 VR 影院）」`：`vr/VrSettingsSection.kt` 复用上游原生 `SettingSwitch` / `NumberSlider`。**已删除**常驻浮层「VR 设置」按钮与 `VrPhoneSettings.kt`（用户明确要求）。含 VR 总开关、8 个滑块、3 个开关、恢复默认 |
 | **景深 / 空间固定感修复** | 代码完成，**真机未验证** | 已核实 SDK `HeadTransform.getHeadView()` 是**逆旋转**（camera-to-head）。旧代码把四元数的**正向**旋转当 view 矩阵用，幕布会跟着头转、贴脸、无空间深度。现改 `VrHeadPose.viewRotationInto()`（转置 3x3 求逆）+ 2 个 JVM 测试 |
@@ -384,7 +384,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | `42215232161` | `72e803c` | 失败：`menuKeyClosesThePanelWhenItIsAlreadyOpen` 单测与 combo 键冲突 |
 | **`42219713375`** | **`3cfcade`** | **成功**：修复 combo 冲突 + 手柄长按 D-pad repeat（含 4 新测试）+ `setZOrderOnTop(true)` 层级尝试；两 job 全绿。**但真机实测进入 VR 显示的是「原本的非 VR 手机界面」，VR 层没出现** |
 | **`42230809154`** | **`f77f482`** | **成功**：回退 `setZOrderOnTop` + 四个 VR 文件加节流诊断日志（渲染逻辑不变）。用户装此版抓 logcat，据此定位真正根因（见 §12） |
-| **`42236078232`** | **`9c9cbc7`** | **成功：竞态修复版**。修复 `VrModeHost` 的 `DisposableEffect` 竞态（§12.4）；两 job 全绿、AAR/APK 两道 JNI 守卫 success、测试断言 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 24349 B、`opennow-vr-debug-arm64-v8a` 47543881 B。**画面效果待用户真机复测（§12.6）** |
+| **`42236078232`** | **`9c9cbc7`** | **成功：竞态修复版**。修复 `VrModeHost` 的 `DisposableEffect` 竞态（§12.4）；两 job 全绿、AAR/APK 两道 JNI 守卫 success、测试断言 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 24349 B、`opennow-vr-debug-arm64-v8a` 47543881 B.**画面效果待用户真机复测（§12.6）** |
+| `42322518683` | `b7961f6` | **成功：层级修复验证**。`VrTheaterView.kt` 一次性 `setZOrderOnTop(true)` 在 `init` 中应用；CI 双 job 全绿，AAR/APK JNI 守卫 success。代码修复见 §3.1/§12。 |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →

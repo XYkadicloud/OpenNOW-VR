@@ -495,6 +495,19 @@ class VrTheaterRenderer : CardboardView.Renderer {
         canvas.drawText("手柄 SELECT / START：打开设置", 28f, 344f, hint)
         canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
         canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
+
+        // Draw center alignment line (single vertical line at panel center, from bottom to middle)
+        if (s.showCenterAlignmentLine) {
+            val linePaint = Paint().apply {
+                color = Color.rgb(120, 165, 195)
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+            }
+            val centerX = PANEL_W / 2f
+            val bottomY = PANEL_H - 2f
+            val middleY = PANEL_H / 2f
+            canvas.drawLine(centerX, bottomY, centerX, middleY, linePaint)
+        }
     }
 
     private fun drawMenu(canvas: Canvas, s: VrSettings) {
