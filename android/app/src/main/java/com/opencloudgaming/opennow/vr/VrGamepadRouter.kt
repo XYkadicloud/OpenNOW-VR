@@ -41,12 +41,15 @@ class VrGamepadRouter {
     private var comboFired = false
     private var lastAxisMs = Long.MIN_VALUE
     private var lastKeyRepeatMs = Long.MIN_VALUE
+    /** Time when both START+SELECT were first held together. Long.MIN_VALUE = not currently held. */
+    private var menuComboStartMs = Long.MIN_VALUE
 
     fun reset() {
         pressed.clear()
         comboFired = false
         lastAxisMs = Long.MIN_VALUE
         lastKeyRepeatMs = Long.MIN_VALUE
+        menuComboStartMs = Long.MIN_VALUE
     }
 
     fun onKey(keyCode: Int, action: Int, isGamepad: Boolean, timeMs: Long = 0L): VrCommand {
@@ -55,6 +58,8 @@ class VrGamepadRouter {
             pressed.remove(keyCode)
             lastKeyRepeatMs = Long.MIN_VALUE
             if (!comboPressed()) comboFired = false
+            // If the menu long-press combo is broken before firing, reset its timer.
+            if (!menuComboPressed()) menuComboStartMs = Long.MIN_VALUE
             return if (menuOpen) VrCommand.Consumed else VrCommand.PassThrough
         }
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
@@ -73,7 +78,19 @@ class VrGamepadRouter {
         // The OS repeats ACTION_DOWN while a key is held. Outside the menu that repeat must not be
         // consumed (the game may use it), so the original pass-through behaviour is unchanged.
         if (alreadyDown) {
-            if (!menuOpen) return VrCommand.PassThrough
+            if (!menuOpen) {
+                // Track long-press START+SELECT for menu toggle.
+                if (menuComboPressed()) {
+                    if (menuComboStartMs == Long.MIN_VALUE) menuComboStartMs = timeMs
+                    else if (timeMs - menuComboStartMs >= VrKeys.MENU_LONG_PRESS_MS) {
+                        menuComboStartMs = Long.MIN_VALUE
+                        return VrCommand.ToggleMenu
+                    }
+                } else {
+                    menuComboStartMs = Long.MIN_VALUE
+                }
+                return VrCommand.PassThrough
+            }
             // In the menu only the D-pad repeats: holding A/B/SELECT must never confirm or close
             // repeatedly. Repeat cadence follows the user's "menu repeat" setting (>= 80 ms).
             if (keyCode !in REPEATABLE_MENU_KEYS) return VrCommand.Consumed
@@ -130,6 +147,12 @@ class VrGamepadRouter {
 
     private fun comboPressed(): Boolean = VrKeys.VR_TOGGLE_COMBOS.any { (a, b) ->
         pressed.contains(a) && pressed.contains(b)
+    }
+
+    /** True if both START and SELECT are currently held (for long-press menu toggle). */
+    private fun menuComboPressed(): Boolean {
+        val combo = VrKeys.MENU_LONG_PRESS_COMBO
+        return pressed.contains(combo[0]) && pressed.contains(combo[1])
     }
 
     private companion object {

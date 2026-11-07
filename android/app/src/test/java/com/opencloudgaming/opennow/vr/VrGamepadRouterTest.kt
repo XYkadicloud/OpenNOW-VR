@@ -53,15 +53,26 @@ class VrGamepadRouterTest {
     }
 
     @Test
-    fun menuKeyOnlyWorksInsideVr() {
+    fun menuLongPressOpensOnlyInsideVr() {
         val r = VrGamepadRouter().also { it.vrEnabled = true }
-        assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_SELECT))
+        // Short press of SELECT/START does NOT open menu (passes through to game).
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 1000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_SELECT, 1100L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 1200L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_START, 1300L))
+        // Long-press START+SELECT together opens menu.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 2000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 2000L))
+        // Before threshold: still pass-through.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START, 2100L))
+        // After 500 ms threshold: toggles menu.
+        assertEquals(VrCommand.ToggleMenu, press(r, VrKeys.BUTTON_START, 2600L))
         r.menuOpen = true
         assertEquals(VrCommand.Confirm, press(r, VrKeys.BUTTON_A))
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_B))
     }
 
-    /** SELECT/START are also the exit-VR combo; inside the menu they must only close it. */
+    /** SELECT/START close the panel when it is already open (single press). */
     @Test
     fun menuKeyClosesThePanelWhenItIsAlreadyOpen() {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }

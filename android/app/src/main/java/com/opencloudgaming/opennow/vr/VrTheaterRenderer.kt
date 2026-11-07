@@ -586,7 +586,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
                 if (s.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"),
             28f, 274f, body,
         )
-        canvas.drawText("手柄 SELECT / START：打开设置", 28f, 344f, hint)
+        canvas.drawText("手柄 长按 START+SELECT：打开设置", 28f, 344f, hint)
         canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
         canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
         // NOTE: the centre alignment line is deliberately NOT drawn on this panel Canvas. It used

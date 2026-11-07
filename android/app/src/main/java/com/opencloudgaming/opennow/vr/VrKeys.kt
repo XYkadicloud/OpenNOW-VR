@@ -43,8 +43,12 @@ object VrKeys {
         intArrayOf(BUTTON_SELECT, BUTTON_START),
     )
 
-    /** Opens/closes the in-VR settings panel. */
-    val MENU_KEYS = intArrayOf(BUTTON_SELECT, BUTTON_START, BUTTON_MODE)
+    /** Opens/closes the in-VR settings panel: long-press START+SELECT together. */
+    val MENU_KEYS = intArrayOf(BUTTON_MODE)
+
+    /** Long-press combo for menu: both START and SELECT held for MENU_LONG_PRESS_MS. */
+    val MENU_LONG_PRESS_COMBO = intArrayOf(BUTTON_START, BUTTON_SELECT)
+    const val MENU_LONG_PRESS_MS = 500L
 
     val FAST_ADJUST_KEYS = intArrayOf(BUTTON_L1, BUTTON_R1, BUTTON_L2, BUTTON_R2)
 }
