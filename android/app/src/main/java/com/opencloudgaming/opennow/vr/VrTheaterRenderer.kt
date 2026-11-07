@@ -302,9 +302,15 @@ class VrTheaterRenderer : CardboardView.Renderer {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glUniform1i(handles.texture, 0)
 
-        if (useVideo) {
-            GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
+if (useVideo) {
+        // Apply horizontal mirror if setting is enabled.
+        // Negating stMatrix[0] (x-scale) mirrors the texture left-right.
+        // This is a pure Kotlin-side change — no GLSL shader modification required.
+        if (s.horizontalMirror) {
+            stMatrix[0] = -stMatrix[0]
+        }
+        GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
         } else {
             GLES20.glUniform1f(handles.flip, PANEL_FLIP_Y)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTextureId)
