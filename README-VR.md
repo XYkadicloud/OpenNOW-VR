@@ -25,7 +25,7 @@
 | 部分 | 状态 |
 | --- | --- |
 | Cardboard SDK v1.36.0 源码 vendor + 必要补丁 | 已完成 |
-| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机、**手机端设置规格表**） | 已完成，有 JVM 单测（7 文件 / 71 个 `@Test`） |
+| 纯逻辑层（设置、范围、键码、矩阵、幕布几何、四元数、菜单模型、手柄状态机、**手机端设置规格表**） | 已完成，有 JVM 单测（覆盖 IPD 缩放/钳制、四元数相对旋转、菜单长按触发与 latch、全项范围/步长） |
 | **VR 设置集成进原生设置页** | 已实现，**真机未验证**；`设置 → Interface → VR 模式`，用上游原生 `SettingSwitch`/`NumberSlider`；**已删除**常驻浮层「VR 设置」按钮 |
 | 景深 / 空间固定感、真实帧宽高比 | 已修复，**真机未验证**；view 矩阵改用 SDK 语义的逆旋转，幕布按真实解码帧比例重建 |
 | 无缝切回手机 / 软键盘 | 已实现，**真机未验证**；VR 内按系统 BACK 或手柄快捷键退出，串流不重连 |
@@ -36,14 +36,16 @@
 | **P1 视频纹理接入**（`GL_TEXTURE_EXTERNAL_OES` + SurfaceTexture → 平面幕布） | **已实现**（零拷贝），**真机未验证** |
 | 纯黑背景 + 无串流时的 2D 状态面板（不再是空白屏） | 已实现，**真机未验证** |
 | 低端机性能优化（渲染循环零堆分配、顶点 50→4、面板节流、官方单目省电档） | 已实现，详见 `HANDOFF.md` 第 9 节 |
-| **P3 手柄驱动的可见 VR 设置面板** | **已实现**：`SELECT`/`START` 打开双列菜单（现 19 行），`↑↓` 选择、`←→` 调整、`A` 确认；含背景/镜像/翻转/辅助线等全部可调项 |
+| **P3 手柄驱动的可见 VR 设置面板** | **已实现**：**长按** `START+SELECT` 或**长按** `HOME/MODE` 打开双列菜单（现 21 行），`↑↓` 选择、`←→` 调整、`A` 确认；含瞳距/背景/镜像/翻转/辅助线/重置中心点等全部可调项 |
+| **瞳距 / IPD 缩放** | **已实现**：`ipdScale` 0.5~1.6x（默认 1.0），纯 Kotlin 缩放 `viewMatrix[12]`，不改 shader、不改 SDK device params |
+| **重置中心点（头部追踪校准）** | **已实现**：把当前头朝向记为新的正前方；`VrHeadPose` 计算 `current * conj(center)` 相对旋转；VR 菜单动作项 + 手机设置页按钮均可触发 |
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
-| **VR 期间强制横向 + 沉浸式全屏** | **已实现**：监听 `VrSession.enabled`，VR 开启时锁 `SENSOR_LANDSCAPE` 并隐藏状态栏/导航栏，退出后恢复原方向与系统栏策略；待真机复测 |
+| **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。用户反馈「状态栏隐藏了但不是全屏」后追加铺满修复；待真机复测 |
 | 真机 / 纸盒 / GFN 串流效果 | **真机反馈确认可用后又反馈失败，已第二轮修复**：`f77f482` 真机 logcat 定案「进 VR 啥也没有」是 `VrModeHost` 竞态，层级修复后用户确认「现在的确能使用了」。但随后 `7a9abfb` 版真机截图暴露：基础状态面板被 180° 反转、串流朝向不对、辅助线贴在 VR 面板里跟头转、状态栏仍显示。**这些画面效果已重新实现（见 §4 与 `HANDOFF.md` §13），全部待真机复测**。CI 只能证明「能编译 + 单测通过 + 能出 APK」，GLSL 运行时编译与视觉朝向 CI 抓不到 |
 
 > 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端与 VR 内手柄设置面板、
-> 可导入的 360° 背景、强制横向全屏均已完成；串流朝向 / 基础 UI 正立 / 辅助线层级已按真机反馈重做，
-> 剩下的是这些画面效果的最新一轮真机复测**。
+> 可导入的 360° 背景、瞳距调节、重置中心点、强制横向真全屏均已完成；串流朝向 / 基础 UI 正立 /
+> 辅助线层级 / 全屏铺满已按真机反馈逐轮重做，剩下的是这些画面效果的最新一轮真机复测**。
 > 接手的 Agent 请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)（项目位置 / 状态 / 待办 / 文档索引），
 > 技术事实基线见 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)。
 
@@ -59,14 +61,18 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 
 | 输入 | 行为 |
 | --- | --- |
-| `L1 + R1` 同时按住，或 `SELECT + START` | 进入 / 退出 VR（任何状态下可用，按住期间只触发一次） |
-| `SELECT` / `START` / `MODE` 单独按 | VR 模式内打开 / 关闭设置菜单 |
-| 菜单关闭时其它所有按键 | **原样透传给游戏**（走原有 `NativeStreamInputRouter`） |
+| `L1 + R1` 同时按住 | 进入 / 退出 VR（任何状态下可用，按住期间只触发一次） |
+| **长按** `START + SELECT` ≥ 500 ms，或**长按** `HOME/MODE` ≥ 500 ms | VR 模式内打开设置菜单（`VrKeys.MENU_LONG_PRESS_MS`）；短按**不触发**，避免游戏里误触 |
+| 菜单关闭时其它所有按键（含短按 `SELECT`/`START`/`MODE`） | **原样透传给游戏**（走原有 `NativeStreamInputRouter`） |
 | 菜单打开：十字键 ↑ / ↓ | 上下选择项 |
 | 菜单打开：十字键 ← / → | 减小 / 增大当前项；按住 L1/R1/L2/R2 时 ×5 加速 |
 | 菜单打开：`A` / 十字键中间 | 确认 / 执行动作项 |
-| 菜单打开：`B` | 关闭菜单 |
+| 菜单打开：单按 `B` / `SELECT` / `START` / `MODE` | 关闭菜单（没有 B 键也不会被困住） |
 | 菜单打开：左摇杆 | 同十字键，带死区与重复延迟 |
+
+> `START+SELECT` 原先是「退出 VR」组合键，改为长按菜单后已从 `VR_TOGGLE_COMBOS` 移除，
+> 现在**只**由 `L1+R1` 负责 VR 开关。长按计时依赖手柄的 OS key-repeat `ACTION_DOWN`（与
+> 菜单内长按十字键复用同一机制），触发后带 latch，松开任意键才允许再次触发。
 
 屏幕右下角的小按钮只是**进入/退出 VR 的兜底入口**（没接手柄时用），不是操控方式。
 
@@ -92,6 +98,7 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `brightness` | 画面亮度 | 0.4 ~ 1.4（1.0） |
 | `curvature` | 幕布曲率，0 = 纯平面 | 0.0 ~ 1.0（0.0） |
 | `screenVerticalOffset` | 画面垂直位置 | -1.0 ~ 1.0 m（0.0） |
+| `ipdScale` | **瞳距 / IPD 缩放**：调小左右眼更容易重合、调大立体感更强；1.00x = 纸盒设备默认值 | 0.5 ~ 1.6（1.0） |
 | `viewerMode` | `CARDBOARD`（立体+畸变，插纸盒）/ `SIMULATION`（单目全屏，裸眼） | `CARDBOARD` |
 | `headTrackingEnabled` | 头部追踪开关（**仅影响视角**） | true |
 | `headTrackingSensitivity` | 追踪灵敏度 | 0.0 ~ 1.5（1.0） |
@@ -105,7 +112,12 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `backgroundImageUri` | 导入的全景图 URI；留空则用内置程序化星空（无需任何资源文件） | 空 |
 | `backgroundBrightness` | 背景独立亮度（不影响幕布亮度） | 0.2 ~ 1.5（1.0） |
 
-菜单里还有三个动作项：纸盒扫码校准、恢复默认、退出 VR。设置用 `SharedPreferences` 持久化。
+菜单里还有四个动作项：**重置中心点**、纸盒扫码校准、恢复默认、退出 VR。设置用 `SharedPreferences` 持久化。
+
+**重置中心点**：VR 菜单选「重置中心点」按 `A`，或在手机设置页点「重置中心点（头部追踪校准）」，
+把当前头朝向存为新的正前方。渲染时 view 矩阵改用 `current * conj(center)` 的相对旋转
+（`VrHeadPose.viewRotationInto` 四参重载），幕布与 360° 球体共用该矩阵，纯 Kotlin 四元数运算、
+不改 shader。戴上纸盒后歪着头也能一键把画面摆正；退出 VR 后重置。
 
 **360° 背景怎么用**：在 `设置 → Interface → VR 模式` 打开「360° 背景图」，点
 「导入 360° 全景图」从系统文件选择器选一张 **2:1 等距圆柱全景图**（推荐 ≤2048×1024），
@@ -166,13 +178,20 @@ VR 内手柄菜单同样有「360° 背景图 / 背景亮度 / 串流左右镜�
 | `42342141378` | `9dffbb5` | 失败 | 镜像提交误删 `showCenterAlignmentLine` 字段 + 误用作用域外变量 `s`，Kotlin 编译失败；下一提交修复 |
 | **`42346490577`** | **`c563391`** | **成功** | 编译修复 + 左右眼镜像一致性修复；两 job 全绿 |
 | `42347655425` | `7a9abfb` | 成功 | 可选 360° 全景背景 + 用户导入图片，镜像/辅助线/背景亮度全部可调；两 job 全绿。**该版真机反馈画面效果失败，见下一行** |
-| **`42355583696`** | **`9fb1d16`** | **成功** | **当前版本**：回退 `PANEL_FLIP_Y=1.0f`（修基础 UI 180° 反转）、新增 `verticalFlip` + 视频专用 `videoTexCoordBuffer`、辅助线移到 `onFinishFrame()` 物理屏幕层、VR 强制横向 + 沉浸式全屏、补齐 3 个开关持久化、菜单 18→19 行；两 job 全绿。**画面效果待真机复测** |
+| `42355583696` | `9fb1d16` | 成功 | 回退 `PANEL_FLIP_Y=1.0f`（修基础 UI 180° 反转）、新增 `verticalFlip` + 视频专用 `videoTexCoordBuffer`、辅助线移到 `onFinishFrame()` 物理屏幕层、VR 强制横向 + 沉浸式全屏、补齐 3 个开关持久化、菜单 18→19 行；两 job 全绿。**画面效果待真机复测** |
+| `42359196869` | `54702f5` | 成功 | **真全屏铺满**：hide `systemGestures`/`displayCutout`、`FLAG_LAYOUT_NO_LIMITS`、`LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。修用户反馈「状态栏隐藏了但不是全屏」；两 job 全绿 |
+| `42359487355` | `27ceea1` | **失败** | 新增 `ipdScale` + 重置中心点；`VrModeHost` 跨类访问 `VrTheaterView.theaterRenderer`（`private`），Kotlin 编译报错。已在 `8294d61` 修复 |
+| `42359823182` | `15315de` | **失败** | 菜单改长按 START+SELECT + HOME；同样因上一条的 private 访问失败（该提交基于含错误代码的 main） |
+| `42361113685` | `8294d61` | **失败** | 修 private 编译错误（`VrTheaterView.recenter()` public 包装）、`START+SELECT` 移出 VR 开关组合、HOME/MODE 也改长按、菜单带 latch。Kotlin 编译已通过，但 JVM 单测 `VrGamepadRouterTest` 第 55 行断言失败（计时起点落在第一个 key-repeat）；已在 `9d4ddd2` 修复 |
+| **`42362976400`** | **`9d4ddd2`** | **成功** | **当前版本**：长按计时起点前移到组合成立的初始 `ACTION_DOWN`、加 1499L 边界断言与注释订正；两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫） |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；
 > 「进 VR 啥也没有」由 `9c9cbc7` 修复 `VrModeHost` 竞态解决，用户已确认 VR 场景能正常显示。
 > **当前剩余的是画面效果复测**：基础 UI 是否正立、串流左右/上下朝向、辅助线是否固定在屏幕正中、
-> 强制横向与系统栏隐藏、退出 VR 后方向与系统栏是否恢复。详见第 6 节与 `HANDOFF.md` §13。
+> VR 画面是否铺满整个物理屏（含刘海/手势区）、瞳距调小/调大是否改变左右眼分离、重置中心点是否摆正、
+> 长按 500 ms 手感与手柄 key-repeat 是否可靠、退出 VR 后方向与系统栏/全屏 flags 是否恢复。
+> 详见第 6 节与 `HANDOFF.md` §13 / §14。
 
 测试数量断言解析 `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0`
 且 `failures/errors == 0`，否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
@@ -213,6 +232,14 @@ VR 内手柄菜单同样有「360° 背景图 / 背景亮度 / 串流左右镜�
    `SurfaceOrTextureVideoDecoder` 只支持 surface→texture 单向回退，VR 的 `SurfaceTexture`
    此时没有解码器消费，只剩 2D 状态面板。**先进 VR 再开始串流**的路径可用。
    完整成因与推荐修复方案见 `docs/HANDOFF.md` 8.5 与计划书 12.8；本机无法真机验证，故未擅自改动上游解码器。
+10. **菜单长按依赖手柄的 OS key-repeat，但计时起点不是 repeat**：`VrGamepadRouter` 是纯 JVM
+    状态机、无定时器，**500 ms 计时从「组合键成立的初始 `ACTION_DOWN`」开始**（第二个
+    START/SELECT 按下、或 MODE 按下那一刻），OS key-repeat 的 `ACTION_DOWN` 只用来「兑现」到点检查。
+    早期实现把计时起点放在第一个 key-repeat，会把手柄的 repeat 初始延迟（~400 ms，因设备而异）
+    叠加到 500 ms 之上，导致实际要按近 1 秒、且 `VrGamepadRouterTest` 第 55 行断言失败
+    （run `42361113685`）；已在 `9d4ddd2` 修正。若某手柄对 `START`/`SELECT`/`MODE` 完全不发
+    key-repeat，长按仍将无法触发，需改为基于 `Handler.postDelayed` 的方案（会引入 Android 框架依赖）。
+    真机验证时请一并确认。
 
 ---
 

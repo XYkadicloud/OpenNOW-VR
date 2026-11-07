@@ -165,8 +165,11 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | **电视版 UI 完全移除** | 完成 | `ConsoleHomeScreen.kt` 移到 `docs/ui-reference/*.txt`；`OpenNowScreens.kt` 的 `consoleHome` 分支、设置开关、`HomeUiState.load`、`console_home_*` 字符串全部删除；`grep` 编译路径零残留 |
 | **VR 黑底 + 2D 纹理正常渲染（层级修复）** | **代码完成 + CI 验证** | `vr/VrTheaterView.kt`：`init` 中一次性 `promoteGlSurface()` 调用 `setZOrderOnTop(true)`，只在表面创建前应用一次（**不**在 `onAttachedToWindow` 重新应用），使 VR GL SurfaceView 置顶于 2D SurfaceView 之上。CI run `42322518683`（commit `b7961f6`）双 job 全绿，AAR/APK JNI 守卫 success。真机仍待 §12.6 验证。 |
 | **上下翻转 / 左右镜像修复 + 中心辅助线** | **真机反馈失败后已重做**（`9fb1d16`，详见 §13） | 旧方案三件套全部作废：`PANEL_FLIP_Y = 1.0f` 只翻基础 UI、`stMatrix[0]` 取负会推偏画面、辅助线画在状态面板 Canvas 会跟头转。现改为 `PANEL_FLIP_Y = 0.0f` + 视频专用 `videoTexCoordBuffer`（`u→1-u` / `v→1-v`，只作用串流、不改任何 GLSL）+ `onFinishFrame()` 物理屏幕层单条白色竖线。**画面效果待真机复测** |
-| **VR 期间强制横向 + 沉浸式全屏** | 代码完成（待真机复测） | `MainActivity` 用 `lifecycleScope` 收集 `VrSession.enabled`：VR 开启时 `vrFullscreenActive=true`，`applyPhoneStreamOrientationLock` 优先返回 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`，`applyStreamSystemBars` 强制 `immersive` 隐藏状态栏/导航栏；退出后恢复原方向与系统栏策略。`onResume` / `onWindowFocusChanged` / `updateSpaceUiSystemBars` 均补了 VR active 时的重新应用，避免被无关配置变化复活系统栏。见 §13.3 |
+| **VR 期间强制横向 + 真全屏铺满** | 代码完成（待真机复测） | `MainActivity` 用 `lifecycleScope` 收集 `VrSession.enabled`：VR 开启时 `vrFullscreenActive=true`，锁 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`、强制 immersive；退出后恢复。用户后续反馈「状态栏隐藏了但不是全屏」，追加 `FLAG_LAYOUT_NO_LIMITS`、`hide(systemGestures + displayCutout)`、`LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`（`OpenNowSystemBars.kt`），让内容铺满含刘海/手势区的整个物理屏。见 §13.3 / §14 |
 | **可选 360° 全景背景 + 用户导入图片** | 代码完成 + CI 验证 | 新增 `backgroundEnabled` / `backgroundImageUri` / `backgroundBrightness`，**默认关闭**（保持纯黑外观与零拷贝视频通路）。低多边形等距圆柱球体（16×24、2304 顶点）在幕布**之前**绘制，复用现有 panel program（`uFlip=0`），无需深度测试、无需新 shader；内置程序化星空兜底（不依赖任何资源文件）；图片经 `ACTION_OPEN_DOCUMENT` 导入并 `takePersistableUriPermission`，`>2048px` 自动降采样。所有 GL 创建/上传/释放都在 GL 线程，`applySettings` 只置标志。CI run `42347655425`（`7a9abfb`）双 job 全绿。真机画面待复测 |
+| **瞳距 / IPD 缩放** | 代码完成（待真机复测） | `VrSettings.ipdScale`（0.5~1.6，默认 1.0）+ `VrMatrix4.scaleIpdInto()` 只缩放 `viewMatrix[12]`（column-major 的 x translation = `eyeFromHead` 的 ±IPD/2；head rotation 零平移）。幕布与 360° 球体共用 MVP，因此一起生效。默认 1.0 时整段跳过，行为与之前 bit-identical；不改 shader、不改 SDK device params。2D 滑块 + VR 菜单行 + 持久化 + JVM 单测齐全。见 §14 |
+| **重置中心点** | 代码完成（待真机复测） | `VrHeadPose.viewRotationInto(out, current, center, sensitivity)` 新增四参重载，算 `current * conj(center)` 相对旋转；`VrTheaterRenderer` 存 `centerOffsetQuaternion`，`recenter()` 抓当前头朝向。`VrSession.onRecenter` 由 `VrModeHost` 接到 `VrTheaterView.recenter()`（renderer 是 private，须经此 public 方法）。VR 菜单「重置中心点」动作项 + 手机设置页按钮。见 §14 |
+| **菜单触发改长按** | 代码完成（待真机复测） | 用户要求 `START/SELECT` 不能单按触发设置、且 `HOME/MODE` 也要长按。现为长按 `START+SELECT` 或长按 `HOME/MODE` ≥ `MENU_LONG_PRESS_MS=500ms`；`START+SELECT` 从 `VR_TOGGLE_COMBOS` 移除（VR 开关只留 `L1+R1`）；短按全部透传给游戏；触发带 latch 防连发。见 §14 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
 | **VR 设置集成进原生设置页** | 代码完成，**真机未验证** | `设置 → Interface → 「VR 模式（半 VR 影院）」`：`vr/VrSettingsSection.kt` 复用上游原生 `SettingSwitch` / `NumberSlider`。**已删除**常驻浮层「VR 设置」按钮与 `VrPhoneSettings.kt`（用户明确要求）。含 VR 总开关、8 个滑块、3 个开关、恢复默认 |
 | **景深 / 空间固定感修复** | 代码完成，**真机未验证** | 已核实 SDK `HeadTransform.getHeadView()` 是**逆旋转**（camera-to-head）。旧代码把四元数的**正向**旋转当 view 矩阵用，幕布会跟着头转、贴脸、无空间深度。现改 `VrHeadPose.viewRotationInto()`（转置 3x3 求逆）+ 2 个 JVM 测试 |
@@ -178,7 +181,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 
 | 项目 | 说明 |
 | --- | --- |
-| **P3：VR 内部、戴头显时用手柄操作的设置面板** | `VrMenuModel` / `VrGamepadRouter` / `VrSettingsStore` 已就绪，但**没有**把菜单画成 VR 内可见面板。注意区分：**手机 2D 端设置面板已完成**（见 3.1），这里指 VR 里那个用手柄调的面板。当前 VR 内 2D 面板只显示状态文字，不可交互 |
+| ~~P3：VR 内部、戴头显时用手柄操作的设置面板~~ | **已于 `9fb1d16` 之后完成并持续扩充**：VR 内菜单现 21 行（含瞳距、重置中心点、扫码、恢复默认、退出 VR），由 `VrGamepadRouter` 手柄驱动，长按 `START+SELECT` / `HOME/MODE` 打开。见 3.1 与 §14 |
 | **串流开始后才进入 VR（中途切换）** | **受解码器架构限制，未实现无缝**，详见 **8.5**。已核实：先进 VR 再开始串流可用；串流中才进 VR 时，解码器仍是纯 texture 路径，VR 的 `SurfaceTexture` 收不到画面 |
 | 完整 2D UI 镜像进 VR | 见 2.2，用户「可以试一下」的可选项，未实现 |
 | 上游 2.3.8 适配 | 阻塞：见 4.2 |
@@ -189,7 +192,9 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 
 1. 点击「进入 VR」不闪退（**已由用户实测确认**修复生效）。
 2. VR 内能看到**纯黑背景 + 一块 2D 平面面板**（此前是「啥也没有」）。
-3. 面板中文文字是否上下颠倒（若颠倒，把 `VrTheaterRenderer.PANEL_FLIP_Y` 从 `0.0f` 改为 `1.0f`）。
+3. 面板中文文字是否正立。**不要把 `VrTheaterRenderer.PANEL_FLIP_Y` 从 `0.0f` 改成 `1.0f`**：
+   `uFlip` 只存在于 `PANEL_FRAGMENT_SHADER`，改它只会把基础 UI 翻 180°，串流（`samplerExternalOES
+   + uSTMatrix`）根本没有这个 uniform。串流朝向请用「串流左右镜像 / 串流上下翻转」两个可调开关。
 4. 串流开始后，画面是否出现在平面幕布上（OES 纹理、`uSTMatrix` 方向、亮度）。
 5. 手柄调整设置后面板数值是否更新、窗口是否变大。
 6. 低端机发热 / 掉帧情况；`viewerMode=SIMULATION`（单目）是否明显更流畅。
@@ -668,4 +673,115 @@ Cardboard SDK 的 `onRenderStereoFrame()` 把左右眼分别画到 FBO 的两个
   是否隐藏、退出 VR 后方向与系统栏是否恢复。
 - 若串流朝向仍相反，在 2D 设置页或 VR 菜单里切换「串流左右镜像 / 串流上下翻转」即可确认方向，
   两个开关独立、可叠加、默认都关、随时可恢复。
-- 未实现：把整个手机 2D 界面放进 VR 场景；瞳距 / IPD 调整。
+- 未实现：把整个手机 2D 界面放进 VR 场景（见 §2.2 可选项）。
+  **瞳距 / IPD 调整已于后续提交实现**，见 §14。
+
+---
+
+## 14. 2026-11-07 第三轮：真全屏、IPD、重置中心点、菜单长按
+
+### 14.1 用户反馈与需求（按顺序）
+
+1. 「有 IPD/瞳距调整吗？」→ 已提交版本里确实没有，补做。
+2. 「vr界面不是全屏ah，虽然上面状态栏是隐藏了但不是全屏」→ 状态栏隐藏已生效，但画面未铺满。
+3. 「然后在加一下重置中心点」→ 头部追踪校准。
+4. 「为什么start/selat键要做为触发设置键，要的话就用长按start+selat触发再改一下」→ 菜单改长按。
+5. 「编译报错了，home键也改成长按」→ 修 CI 失败，且 HOME/MODE 也改长按。
+
+### 14.2 真全屏铺满（commit `54702f5`，CI run `42359196869` 成功）
+
+`9fb1d16` 只做了「隐藏 bars」，用户真机看到仍有黑边 / 未铺满。补三处：
+
+- `OpenNowSystemBars.applyOpenNowSystemBars()`：immersive 时 `controller.hide()` 增加
+  `WindowInsets.Type.systemGestures()` 与 `WindowInsets.Type.displayCutout()`；
+  `window.attributes.layoutInDisplayCutoutMode = LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`；
+  非 immersive 时恢复 `LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT`。
+- `MainActivity.applyVrFullscreen(active)`：VR 开启 `window.addFlags(FLAG_LAYOUT_NO_LIMITS)`，
+  关闭时 `clearFlags`，让 decor 内容延伸到状态栏 / 手势区 / 刘海区。
+- `styles.xml` 保持 `windowFullscreen=false` 不动（运行时 insets controller 已接管，避免影响非 VR 原版 UI）。
+
+### 14.3 瞳距 / IPD（commit `27ceea1` 一带）
+
+- `VrRanges` 增 `IPD_SCALE_MIN=0.5 / MAX=1.6 / STEP=0.05`；`VrSettings.ipdScale=1.0f`，
+  `sanitized()` 钳制；`VrSettingsStore` 加 `K_IPD_SCALE` 读写；`VrSettingSpecs.ALL` 加 2D 滑块；
+  `VrMenuModel` 加「瞳距 / IPD」RANGE 行；`VrSettingsSection` 底部说明补用法。
+- `VrMatrix4.scaleIpdInto(out, scale)` 只改 `out[12]`。依据：`Eye.getEyeFromHead()` 对左右眼是
+  ±IPD/2 的纯 x 平移，head rotation 矩阵零平移，所以 `viewMatrix[12]` 恰好是瞳距位移。
+  幕布与 360° 球体共用 `mvpMatrix`，一起生效。
+- 默认 `1.0f` 时渲染器整段 `if` 跳过，行为与之前 bit-identical。不改 shader、不改 SDK 参数。
+
+### 14.4 重置中心点（commit `27ceea1`）
+
+- `VrHeadPose` 新增四参重载 `viewRotationInto(out, current, center, sensitivity)`：
+  先算 `current * conj(center)` 相对四元数（`quatMultiplyConj`），再复用原 `viewRotationInto`
+  生成逆旋转 view 矩阵。
+- `VrTheaterRenderer` 存 `centerOffsetQuaternion`（单位四元数=未校准）；`recenter()` 拷贝当前
+  `headQuaternion`；`onDrawEye` 改调四参重载。
+- 触发链：`VrSession.onRecenter: (() -> Unit)?` → `VrModeHost` 里 `VrSession.onRecenter =
+  { view.recenter() }` → `VrTheaterView.recenter()` → `theaterRenderer.recenter()`。
+- 入口：VR 菜单 `VrMenuItemId.RECENTER`（ACTION 行，`activate()` 里调 `VrSession.recenter()`），
+  以及手机设置页「重置中心点（头部追踪校准）」按钮。菜单 20 → 21 行。
+
+### 14.5 菜单触发改长按（commit `15315de` → 编译修复 `8294d61`）
+
+- `VrKeys`：`VR_TOGGLE_COMBOS` **只留 `L1+R1`**（`START+SELECT` 原是退出 VR 组合键，与长按
+  菜单直接冲突，必须移除）；新增 `MENU_LONG_PRESS_COMBO=[START, SELECT]`、
+  `MENU_LONG_PRESS_MS=500L`、`MENU_CLOSE_KEYS=[SELECT, START, MODE]`；删除 `MENU_KEYS`。
+- `VrGamepadRouter`：用 `menuHoldStartMs` + `menuHoldFired` latch 统一计时；
+  `menuHoldActive()` = 同时按住 START+SELECT **或** 按住 MODE。**计时从组合键成立的初始
+  `ACTION_DOWN` 开始**（在 `alreadyDown==false` 分支里 arm），OS key-repeat 的 `ACTION_DOWN`
+  只负责检查是否已过 500 ms 并发一次 `ToggleMenu`；松开任意键 `clearMenuHold()`，防连发。
+  短按全部 `PassThrough` 给游戏。菜单打开时单按 B / SELECT / START / MODE → `CloseMenu`。
+  > 计时起点**不能**放在第一个 key-repeat：手柄 repeat 初始延迟约 400 ms、且因设备而异，
+  > 会叠加到 500 ms 阈值之上（用户实际要按近 1 秒）。见 §14.7 的 CI 失败记录。
+- **编译失败根因（两个 run `42359487355`、`42359823182` 均 failure）**：
+  `VrModeHost.kt` 写了 `view.theaterRenderer.recenter()`，但 `VrTheaterView.theaterRenderer`
+  是 `private val`，跨类访问 Kotlin 编译报错。修复：给 `VrTheaterView` 加 public
+  `fun recenter() = theaterRenderer.recenter()`，`VrModeHost` 改调 `view.recenter()`。
+  教训：新增跨类调用前先确认目标成员可见性；本机无 Android 工具链，只能靠 CI 兜底。
+- 测试同步：`VrGamepadRouterTest` 改 `startSelectDoesNotToggleVrButLongPressOpensMenu`、
+  新增 `homeKeyRequiresLongPress`、`menuLongPressOpensOnlyInsideVr`、`homeKeyClosesThePanel...`；
+  `VrMenuModelTest` 数量 20→21 并加 RECENTER 断言；`VrMatrix4Test` / `VrSettingsTest`
+  补 IPD 缩放与钳制断言。
+
+### 14.6 仍待用户真机复测（CI 无法证明）
+
+1. VR 画面是否**铺满整个物理屏**（无上下/左右黑边、刘海与手势区无留黑）。
+2. 长按 500 ms 手感是否合适；目标手柄是否确实发送 OS key-repeat `ACTION_DOWN`
+   （**到点触发**依赖它，与菜单内长按十字键同一机制；**计时本身从初始按下开始，不依赖 repeat 延迟**）。
+3. 「瞳距 / IPD」调小/调大是否确实改变左右眼分离、可随时恢复 1.00x。
+4. 「重置中心点」是否把歪头时的画面摆正；退出 VR 后是否重置。
+5. §13.5 列出的第二轮画面项（基础 UI 正立、串流镜像/翻转、辅助线固定屏幕中央）。
+6. 退出 VR 后方向 / 系统栏 / 全屏 flags 是否恢复原状。
+
+### 14.7 run `42361113685` 的 JVM 单测失败与修复（commit `9d4ddd2`）
+
+`8294d61` 解决了 Kotlin 编译错误（private renderer），但 `vr-unit-tests-and-debug-apk`
+的 step 9 仍失败：**87 tests completed, 1 failed** ——
+`VrGamepadRouterTest > startSelectDoesNotToggleVrButLongPressOpensMenu FAILED`
+（`AssertionError at VrGamepadRouterTest.kt:55`）。日志见根目录 `vr_ci_42361113685_job2.log`。
+
+**根因（不是测试写错数值，是计时起点设计错）**：`menuHoldStartMs` 原先只在第一个 OS
+key-repeat 的 `ACTION_DOWN`（`alreadyDown==true`）分支里赋值。测试里组合在 `1000L` 成立、
+第一个 repeat 是 `1200L`（arm），`1600L` 的 repeat 只过了 `400 ms < 500 ms`，返回
+`PassThrough` 而测试期望 `ToggleMenu`。真机上这还意味着手柄的 repeat 初始延迟（~400 ms，
+各设备不同）被叠加到用户设定的 500 ms 之上，长按体感接近 1 秒。
+
+**修复**：把计时 arm 移到 `alreadyDown==false` 的初始按下分支 —— 组合键一成立就记
+`menuHoldStartMs = timeMs`；repeat 分支只做 `timeMs - menuHoldStartMs >= 500` 的到点检查
+（纯 JVM 状态机没有定时器，仍必须靠 repeat 事件来兑现）。同时：
+
+- `VrGamepadRouterTest.startSelectDoesNotToggleVrButLongPressOpensMenu` 补 `1499L` 边界断言
+  （499 ms 不触发）与 `1600L` 触发断言，把「从初始按下计时」这个契约锁死；
+- `menuLongPressOpensOnlyInsideVr` / `homeKeyRequiresLongPress` 的注释同步订正；
+- 提交前用 Python 精确复刻状态机跑完 20 个 `VrGamepadRouterTest` 用例，20/20 通过，
+  避免再浪费一次约 6 分钟的 CI。
+
+**验证**：run `42362976400`（`9d4ddd2`）两 job 全绿 —— `build-cardboard-sdk-aar`、
+`Run VR JVM unit tests and build the debug APK`、`Assert VR JVM tests actually ran`、
+`Collect the APK` 以及两处 `Verify the Cardboard JNI bridge ...` 全部 success。当前 `main` 为绿灯。
+
+**遗留**：长按「触发」仍依赖手柄发出 OS key-repeat；不发 repeat 的手柄需引入
+`Handler.postDelayed`（会破坏纯 JVM 可测性），属已知限制，真机验证项见 §14.6 第 2 条。
+另：`VrHeadPose` 四参重载每帧 `FloatArray(4)` 临时分配（与 §9 零分配目标冲突）、
+`centerOffsetQuaternion` 主线程写 / GL 线程读无同步，均为待优化项，本轮未改动。
