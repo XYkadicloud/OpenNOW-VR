@@ -164,7 +164,8 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | `MainActivity` 同 Activity overlay 接线（5 处） | 完成 | `MainActivity.kt`：`VrSession.attach`、根 `Box` 叠加 `VrModeHost()`、`dispatchKeyEvent`、`dispatchGenericMotionEvent` |
 | **电视版 UI 完全移除** | 完成 | `ConsoleHomeScreen.kt` 移到 `docs/ui-reference/*.txt`；`OpenNowScreens.kt` 的 `consoleHome` 分支、设置开关、`HomeUiState.load`、`console_home_*` 字符串全部删除；`grep` 编译路径零残留 |
 | **VR 黑底 + 2D 纹理正常渲染（层级修复）** | **代码完成 + CI 验证** | `vr/VrTheaterView.kt`：`init` 中一次性 `promoteGlSurface()` 调用 `setZOrderOnTop(true)`，只在表面创建前应用一次（**不**在 `onAttachedToWindow` 重新应用），使 VR GL SurfaceView 置顶于 2D SurfaceView 之上。CI run `42322518683`（commit `b7961f6`）双 job 全绿，AAR/APK JNI 守卫 success。真机仍待 §12.6 验证。 |
-| **上下翻转 / 左右镜像修复 + 中心辅助线** | 代码完成 + CI 验证 | `PANEL_FLIP_Y = 1.0f` 修上下翻转；`onDrawEye` 对 `stMatrix[0]` 取负实现左右镜像（**纯 Kotlin，不改 GLSL shader**），并在上传 uniform 后复位符号，保证左右眼同样镜像（否则右眼被二次取反而未镜像）；`showCenterAlignmentLine` 在状态面板正中画一条从下到中心的竖线。CI run `42346490577`（`c563391`）双 job 全绿。真机画面待复测 |
+| **上下翻转 / 左右镜像修复 + 中心辅助线** | **真机反馈失败后已重做**（`9fb1d16`，详见 §13） | 旧方案三件套全部作废：`PANEL_FLIP_Y = 1.0f` 只翻基础 UI、`stMatrix[0]` 取负会推偏画面、辅助线画在状态面板 Canvas 会跟头转。现改为 `PANEL_FLIP_Y = 0.0f` + 视频专用 `videoTexCoordBuffer`（`u→1-u` / `v→1-v`，只作用串流、不改任何 GLSL）+ `onFinishFrame()` 物理屏幕层单条白色竖线。**画面效果待真机复测** |
+| **VR 期间强制横向 + 沉浸式全屏** | 代码完成（待真机复测） | `MainActivity` 用 `lifecycleScope` 收集 `VrSession.enabled`：VR 开启时 `vrFullscreenActive=true`，`applyPhoneStreamOrientationLock` 优先返回 `SCREEN_ORIENTATION_SENSOR_LANDSCAPE`，`applyStreamSystemBars` 强制 `immersive` 隐藏状态栏/导航栏；退出后恢复原方向与系统栏策略。`onResume` / `onWindowFocusChanged` / `updateSpaceUiSystemBars` 均补了 VR active 时的重新应用，避免被无关配置变化复活系统栏。见 §13.3 |
 | **可选 360° 全景背景 + 用户导入图片** | 代码完成 + CI 验证 | 新增 `backgroundEnabled` / `backgroundImageUri` / `backgroundBrightness`，**默认关闭**（保持纯黑外观与零拷贝视频通路）。低多边形等距圆柱球体（16×24、2304 顶点）在幕布**之前**绘制，复用现有 panel program（`uFlip=0`），无需深度测试、无需新 shader；内置程序化星空兜底（不依赖任何资源文件）；图片经 `ACTION_OPEN_DOCUMENT` 导入并 `takePersistableUriPermission`，`>2048px` 自动降采样。所有 GL 创建/上传/释放都在 GL 线程，`applySettings` 只置标志。CI run `42347655425`（`7a9abfb`）双 job 全绿。真机画面待复测 |
 | **低端机性能优化** | 代码完成，**真机未验证** | 见第 9 节 |
 | **VR 设置集成进原生设置页** | 代码完成，**真机未验证** | `设置 → Interface → 「VR 模式（半 VR 影院）」`：`vr/VrSettingsSection.kt` 复用上游原生 `SettingSwitch` / `NumberSlider`。**已删除**常驻浮层「VR 设置」按钮与 `VrPhoneSettings.kt`（用户明确要求）。含 VR 总开关、8 个滑块、3 个开关、恢复默认 |
@@ -388,10 +389,11 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 | **`42230809154`** | **`f77f482`** | **成功**：回退 `setZOrderOnTop` + 四个 VR 文件加节流诊断日志（渲染逻辑不变）。用户装此版抓 logcat，据此定位真正根因（见 §12） |
 | **`42236078232`** | **`9c9cbc7`** | **成功：竞态修复版**。修复 `VrModeHost` 的 `DisposableEffect` 竞态（§12.4）；两 job 全绿、AAR/APK 两道 JNI 守卫 success、测试断言 success；artifacts：`cardboard-sdk-aar` 385622 B、`vr-unit-test-report` 24349 B、`opennow-vr-debug-arm64-v8a` 47543881 B.**画面效果待用户真机复测（§12.6）** |
 | `42322518683` | `b7961f6` | **成功：层级修复验证**。`VrTheaterView.kt` 一次性 `setZOrderOnTop(true)` 在 `init` 中应用；CI 双 job 全绿，AAR/APK JNI 守卫 success。代码修复见 §3.1/§12。 |
-| `42340709719` | `5542a60` | 成功：`PANEL_FLIP_Y` 由 `0.0f` 改为 `1.0f` 修复串流上下翻转；两 job 全绿 |
+| `42340709719` | `5542a60` | 成功但**结论错误（已在 `9fb1d16` 回退）**：`PANEL_FLIP_Y` 由 `0.0f` 改为 `1.0f` 想修串流上下翻转，但 `uFlip` 只存在于 `PANEL_FRAGMENT_SHADER`，串流走 `samplerExternalOES + uSTMatrix` 没有该 uniform；实际只把基础 UI 翻了 180°、串流没变。CI 双 job 全绿但视觉是坏的，见 §13.2 |
 | `42342141378` | `9dffbb5` | **失败（已定位并修复）**：加 `horizontalMirror` 时误把 `VrSettings.showCenterAlignmentLine` 字段删掉，但 `sanitized()` 与 `VrTheaterRenderer.drawStatus()` 仍引用它；同时 `onDrawEye` 里误用了作用域外的 `s.horizontalMirror`（该处只有 `current`）。Kotlin `Unresolved reference` 导致 `:app:compileDebugKotlin` 失败 |
 | **`42346490577`** | **`c563391`** | **成功：编译修复版**。恢复 `showCenterAlignmentLine` 字段（与 `horizontalMirror` 共存）；镜像改用 `current.horizontalMirror`，并在 `glUniformMatrix4fv` 之后复位 `stMatrix[0]` 符号，保证左右眼都镜像。两 job 全绿 |
-| **`42347655425`** | **`7a9abfb`** | **成功：可选 360° 背景 + 图片导入版**。新增 3 个设置项、球体渲染、2D 侧导入 UI、VR 菜单扩到 2×9 行、单测补到 18 行断言与新开关用例；两 job 全绿，`Assert VR JVM tests actually ran`、`Collect the APK`、`Verify the Cardboard JNI bridge is in the APK` 全部 success。**真机画面待复测** |
+| **`42347655425`** | **`7a9abfb`** | **成功：可选 360° 背景 + 图片导入版**。新增 3 个设置项、球体渲染、2D 侧导入 UI、VR 菜单扩到 2×9 行、单测补到 18 行断言与新开关用例；两 job 全绿。**该版真机反馈画面效果失败（基础 UI 反转 / 串流朝向 / 辅助线层级 / 状态栏），见 §13** |
+| **`42355583696`** | **`9fb1d16`** | **成功：真机反馈修复版（§13）**。回退 `PANEL_FLIP_Y` 为 `0.0f`；新增 `verticalFlip` 与视频专用 `videoTexCoordBuffer`（镜像/翻转只作用串流，不改 GLSL、不动 `stMatrix`）；辅助线从 panel Canvas 移到 `onFinishFrame()` 的物理屏幕层；`MainActivity` 强制 `SENSOR_LANDSCAPE` + immersive；补 3 个开关持久化；菜单 18→19 行；2D 设置页加上下翻转开关；单测同步。两 job 全绿。**画面效果待真机复测（§13.5）** |
 
 **`42202834080` 人工二进制核验（已执行）**：解包测试报告 7 个 XML →
 `7 suites / 71 tests / 0 failures / 0 errors / 0 skipped`；解包 APK →
@@ -592,3 +594,78 @@ adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer
 1. 覆盖安装新 APK，进 VR 应能看到黑色房间 + 2D 状态面板/串流画面（不再是原手机 UI）。
 2. BACK 退出 VR 应无重连、软键盘恢复。
 3. 若仍有问题，按 §12.5 抓 logcat 回传。
+
+---
+
+## 13. 真机反馈失败 → 第二轮修复（commit `9fb1d16`）
+
+### 13.1 用户反馈（`7a9abfb` 版三张真机截图）
+
+用户确认 VR 场景能正常显示后，反馈：
+
+- 「串流界面还是不正常」；
+- 「最基础的介面也都变成反转了」——状态面板 `OpenNOW VR` 与中文状态文字 180° 倒置；
+- 辅助线「在 VR 界面里、会跟头转动」，用户明确要求它属于 **2D 界面层级**；
+- 截图里 Android 状态栏（`3:06`、电量 `37`）仍显示，要求**强制横向全屏**；
+- 用户补充旧截图澄清：「这个是之前不能正常使用 vr 场景时的界面」——旧图中间白线是
+  Cardboard SDK `CardboardLayout.java` / `cardboard_ui.xml` 的 `ui_alignment_marker`
+  （`layout_gravity="center_horizontal|bottom"`，与左上 X、右上齿轮同一 2D View 层），
+  **不是**当前 VR 场景里的线。
+
+### 13.2 根因
+
+1. **基础 UI 反转**：`5542a60` 把 `PANEL_FLIP_Y` 从 `0.0f` 改成 `1.0f`，想修串流上下翻转。
+   但 `uFlip` **只存在于 `PANEL_FRAGMENT_SHADER`**，只作用于 `GL_TEXTURE_2D` 状态面板/菜单；
+   串流走 `VIDEO_FRAGMENT_SHADER`（`samplerExternalOES + uSTMatrix`），**根本没有 `uFlip`**。
+   所以那次改动没碰到视频，只把基础 UI 翻了 180°。CI 能过、视觉是坏的。
+2. **串流朝向不对**：旧左右镜像用 `stMatrix[0] = -stMatrix[0]`，只改 x-scale，没处理
+   `SurfaceTexture.getTransformMatrix()` 可能携带的 crop / translation，会把画面推偏；
+   且 `onDrawEye()` 每眼各跑一次，共享 `stMatrix` 被反复取负。
+3. **辅助线错位**：旧实现画在 `drawStatus(canvas, s)` 的 panel `Canvas` 上，因此成为
+   VR quad 纹理的一部分——每只眼各一条、随透视变形、跟头转动。
+4. **状态栏**：VR 开启时没走 immersive，`VrSession.enabled` 没有驱动窗口策略。
+5. **持久化漏项**：`VrSettingsStore` 之前没保存 `showCenterAlignmentLine` /
+   `horizontalMirror`，开关重启会丢。
+
+### 13.3 修复（全部不改任何 GLSL 源码）
+
+| 文件 | 改动 |
+| --- | --- |
+| `VrTheaterRenderer.kt` | `PANEL_FLIP_Y` 回退 `0.0f`；新增 `videoTexCoordBuffer`，`horizontalMirror` 用 `u→1-u`、`verticalFlip` 用 `v→1-v`，**只给视频 quad**，panel/menu/360° 球体继续用原 `texCoordBuffer`；视频路径不再 mutate `stMatrix` |
+| `VrTheaterRenderer.kt` | 删除 panel Canvas 里的辅助线；新增 `linePositionBuffer` / `lineTexCoordBuffer` / `lineTextureId` / `createLineResources()` / `drawScreenSpaceAlignmentLine()` |
+| `VrTheaterRenderer.kt` | 菜单 18→19 行（`MENU_ROWS_PER_COLUMN=10`、`MENU_ROW_HEIGHT=30f`）；`onRendererShutdown` 释放线纹理；`createLineResources()` 幂等（surface 重建先删旧纹理） |
+| `VrSettings.kt` | 新增 `verticalFlip`；`sanitized()` 保留；三个朝向/辅助线开关默认全关 |
+| `VrSettingsStore.kt` | 补 `K_ALIGN_LINE` / `K_H_MIRROR` / `K_V_FLIP` 的 load / save |
+| `VrSettingsSection.kt` | 新增「串流画面上下翻转」开关，更新镜像/辅助线说明 |
+| `VrMenuModel.kt` | 新增 `VERTICAL_FLIP` 枚举项，rawValue / display / activate / toggle 全部补齐 |
+| `MainActivity.kt` | `vrFullscreenActive`，`lifecycleScope` 收集 `VrSession.enabled`；VR 开时 `SENSOR_LANDSCAPE` + `applyOpenNowSystemBars(immersive=true)`，退出后恢复；`updateSpaceUiSystemBars` 不再因 hidden 相同而 early-return |
+| 两个 JVM 测试 | 菜单行数 18→19，新增 `VERTICAL_FLIP` 可逆性与三开关默认值用例 |
+
+### 13.4 辅助线为什么放在 `onFinishFrame()` 而不是 `onDrawEye()`
+
+`VrTheaterView` 的 GL SurfaceView 被 `setZOrderOnTop(true)` 置顶，普通 Compose 2D View
+会被盖住，**无法直接复用 SDK 旧的 `ui_alignment_marker`**。
+
+Cardboard SDK 的 `onRenderStereoFrame()` 把左右眼分别画到 FBO 的两个半屏 viewport，
+再用 `renderEyeToDisplay()` 做畸变合成到默认 framebuffer；`onFinishFrame(viewport)` 在
+**合成之后**调用，且传入的是整屏 viewport。因此把辅助线画在这里：
+
+- 显式 `glBindFramebuffer(GL_FRAMEBUFFER, 0)` + `glViewport(整屏)`；
+- identity MVP，NDC `x=0`（物理屏幕正中）、`y=-1..0`（底边到中间）、宽 `0.003`；
+- 关闭 depth / scissor 测试，避免被 SDK 畸变 pass 的残留状态裁剪；
+- 复用 panel program + 1×1 纯白纹理，`uFlip=0`、`uBrightness=1`。
+
+结果：**一条**笔直白色细线、固定在物理屏幕正中央、不分左右眼、不受畸变弯曲、不跟头转。
+这正是用户旧截图里那条 2D marker 的位置与层级。
+
+### 13.5 CI 与待复测
+
+- CI run `42355583696`（commit `9fb1d16`）：**两个 job 全绿**（`build-cardboard-sdk-aar`
+  + `vr-unit-tests-and-debug-apk`；单测断言、APK 收集、JNI 守卫全部 success）。
+  见 §5.1 / `README-VR.md` §5.1 记录。
+- **全部画面效果仍需用户真机复测**：基础 UI 是否正立、左右镜像 / 上下翻转是否分别正确、
+  两项叠加是否等于 180° 旋转、辅助线是否固定在屏幕正中且不跟头转、强制横向与状态栏/导航栏
+  是否隐藏、退出 VR 后方向与系统栏是否恢复。
+- 若串流朝向仍相反，在 2D 设置页或 VR 菜单里切换「串流左右镜像 / 串流上下翻转」即可确认方向，
+  两个开关独立、可叠加、默认都关、随时可恢复。
+- 未实现：把整个手机 2D 界面放进 VR 场景；瞳距 / IPD 调整。
