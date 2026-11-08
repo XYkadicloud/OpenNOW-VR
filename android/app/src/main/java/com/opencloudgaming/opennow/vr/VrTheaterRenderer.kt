@@ -123,6 +123,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private var lastAspect: Float = VrSession.videoAspect
     private var lastMenuOpen = false
     private var lastSelectedIndex = -1
+    private var lastMenuPage: VrMenuPage = VrMenuModel.pages.first()
+    private var lastEditMode = false
 
     // Diagnostic-only logging state. All access is on the single GL thread, so plain fields are OK.
     // Per-frame logging is throttled to one line every LOG_INTERVAL_FRAMES; key state changes
@@ -156,6 +158,43 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private val linePositionBuffer: FloatBuffer = newFloatBuffer(12)
     private val lineTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
     private var lineTextureId = 0
+
+    // -----------------------------------------------------------------------------------------
+    // "上下填满" FILL (VrScreenFillMode.FILL) — cached per-eye MVPs, replayed on the DEFAULT
+    // framebuffer in onFinishFrame().
+    //
+    // Root cause of the big black bands: CardboardView.onRenderStereoFrame() renders BOTH eyes
+    // into a shared FBO using two HALF-width / FULL-height viewports (w/2 x h), then calls
+    // renderEyeToDisplay() which re-projects that FBO through a lens-distortion mesh. That mesh
+    // is built from a FOV clamped to the device params (lens_distortion.cc:189-194), so it covers
+    // only the middle of the screen -> round corners + big black bands above/below + centre gap.
+    //
+    // The FBO CONTENT is already full-height. We keep stereo rendering exactly as-is (both eye
+    // MVPs, head pose, IPD shift, 360° background), cache each eye's final MVP, then in
+    // onFinishFrame() — after the SDK has composited — clear the default framebuffer and draw
+    // each eye once more into its own rectangular half-screen viewport (w/2 x FULL height). The
+    // distortion result is overwritten by two edge-to-edge rectangles: no vignette, no rounded
+    // corners, no centre gap, 100% vertical fill, and a near-SQUARE viewport per eye on a
+    // landscape phone. Both eyes still use DIFFERENT matrices, so this is NOT monocular / 2D
+    // direct display. No shader source change, no SDK C++ change, zero-copy video path untouched.
+    // -----------------------------------------------------------------------------------------
+    private val frameMvps = arrayOf(FloatArray(16), FloatArray(16))
+    private var frameMvpCount = 0
+    /** Snapshot of what onDrawEye() decided, consumed by onFinishFrame(). */
+    private var frameUseVideo = false
+    private var frameDrawPanel = true
+    private var surfaceWidth = 0
+    private var surfaceHeight = 0
+
+    // Preallocated paints for the modern two-level menu. Allocated once in createPanelResources();
+    // drawMenu()/drawStatus() only re-assign colours, so the render loop stays allocation-free.
+    private var menuCardPaint: Paint? = null
+    private var menuCardStrokePaint: Paint? = null
+    private var menuAccentPaint: Paint? = null
+    private var menuTrackPaint: Paint? = null
+    private var menuProgressPaint: Paint? = null
+    private var menuTabPaint: Paint? = null
+    private var menuGradientPaint: Paint? = null
 
     fun applySettings(value: VrSettings) {
         val prev = settings
@@ -227,6 +266,10 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     }
 
     override fun onNewFrame(headTransform: HeadTransform) {
+        // onNewFrame() runs exactly once per frame, BEFORE onDrawEye() (once in monocular mode,
+        // twice in stereo). Reset the per-eye MVP cache here so onFinishFrame() always replays
+        // THIS frame's matrices only.
+        frameMvpCount = 0
         headTransform.getQuaternion(headQuaternion, 0)
         if (VrVideoSurfaceRegistry.consumeFrameAvailable()) {
             if (!logFirstFrameAvailable) {
@@ -259,14 +302,18 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val current = settings
         val menuOpen = VrSession.menuOpen.value
         val selectedIndex = VrSession.selectedIndex.value
-        if (menuOpen != lastMenuOpen) {
+        val menuPage = VrSession.menuPage.value
+        val editMode = VrSession.editMode.value
+        // A page switch, an A-armed edit-mode change and a selection change all alter the menu
+        // bitmap, so any of them must force a panel re-upload on the GL thread.
+        if (menuOpen != lastMenuOpen || menuPage != lastMenuPage || editMode != lastEditMode ||
+            (menuOpen && selectedIndex != lastSelectedIndex)
+        ) {
             lastMenuOpen = menuOpen
+            lastMenuPage = menuPage
+            lastEditMode = editMode
             lastSelectedIndex = selectedIndex
             meshDirty = true
-            forcePanelUpload = true
-            panelDirty = true
-        } else if (menuOpen && selectedIndex != lastSelectedIndex) {
-            lastSelectedIndex = selectedIndex
             forcePanelUpload = true
             panelDirty = true
         }
@@ -298,8 +345,11 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             forcePanelUpload = false
         }
 
-        // Compute the per-eye MVP first so the optional 360° background sphere (drawn next, before
-        // the flat panel) shares the identical view/projection and tracks head rotation.
+        // -------------------------------------------------------------------------------------
+        // Per-eye MVP. Cardboard's eyeFromHead + off-axis projection + distortion mesh all derive
+        // from the same inter_lens_distance; we keep them completely intact. The effective IPD is
+        // applied AFTER the MVP as an equal-and-opposite screen-space shift (1.0 = strict no-op).
+        // -------------------------------------------------------------------------------------
         val head = if (current.headTrackingEnabled) {
             VrHeadPose.viewRotationInto(
                 headRotation,
@@ -310,15 +360,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         } else {
             identityMatrix
         }
-        // Keep Cardboard's eyeFromHead + off-axis projection + distortion mesh completely intact.
-        // All three are derived from the same inter_lens_distance device parameter; scaling only
-        // the eye translation (the old approach) desynchronised the camera from its frustum and
-        // made the two eyes drift apart instead of fusing. The effective IPD is applied AFTER the
-        // MVP is assembled, as an equal-and-opposite screen-space shift per eye.
         VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
         VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
-        // 1.0 = no shift at all, so the default path is bit-identical to the unmodified SDK.
-        // MONOCULAR (SIMULATION) has no stereo pair to adjust and is left untouched.
         if (current.ipdScale != 1.0f) {
             val eyeSign = when (eye.getEyeType()) {
                 CardboardView.Eye.LEFT -> 1f
@@ -328,37 +371,37 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             VrMatrix4.applyIpdShiftInto(mvpMatrix, current.ipdScale, eyeSign)
         }
 
-        // 360° background sphere: drawn FIRST so the flat cinema panel overdraws its centre.
-        drawBackground(current)
+        // Cache this eye's FINAL MVP for the FILL replay. onNewFrame() resets the count once per
+        // frame; Cardboard calls onDrawEye() LEFT first, then RIGHT (once in monocular mode).
+        if (frameMvpCount < frameMvps.size) {
+            System.arraycopy(mvpMatrix, 0, frameMvps[frameMvpCount], 0, 16)
+            frameMvpCount++
+        }
 
-        // The three original early-returns are preserved in their original order; each also logs
-        // the exact reason the eye draws NOTHING, but only at the state edge so a healthy render
-        // loop stays log-silent.
-        if (!useVideo && !menuOpen && !current.showStatus) {
+        // Decide once what this frame contains, then snapshot it for the replay.
+        val showPanel = useVideo || menuOpen || current.showStatus
+        val activeHandles = if (useVideo) video else panel
+        val drawPanel = showPanel && activeHandles != null && vertexCount != 0
+        frameUseVideo = useVideo
+        frameDrawPanel = drawPanel
+
+        // Dev-only, edge-triggered diagnostics: a healthy render loop stays log-silent.
+        if (!showPanel) {
             if (!logLastStatusSkip) {
                 logLastStatusSkip = true
                 Log.d(TAG, "onDrawEye: SKIP — panel suppressed by showStatus=false; nothing drawn")
             }
-            return
+        } else {
+            logLastStatusSkip = false
         }
-        logLastStatusSkip = false
-
-        val handles = (if (useVideo) video else panel)
-        if (handles == null) {
+        if (activeHandles == null) {
             if (!logLastHandlesNull) {
                 logLastHandlesNull = true
                 Log.w(TAG, "onDrawEye: SKIP — program handles null (useVideo=$useVideo); nothing drawn")
             }
-            return
+        } else {
+            logLastHandlesNull = false
         }
-        logLastHandlesNull = false
-        if (vertexCount == 0) {
-            Log.w(TAG, "onDrawEye: SKIP — vertexCount==0; nothing drawn")
-            return
-        }
-
-        // A throttled heartbeat: proves onDrawEye is being called and reaching glDrawArrays,
-        // without flooding logcat on a low-end device.
         if (logFrameCounter++ % LOG_INTERVAL_FRAMES == 0) {
             Log.d(
                 TAG,
@@ -367,27 +410,41 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             )
         }
 
-        // Use the INVERSE head rotation for the view matrix, matching the SDK's
-        // HeadTransform.getHeadView() / Eye.applyHeadView(). The forward rotation would make the
-        // screen follow the head (no spatial depth); the inverse keeps it anchored in the world.
-        // mvpMatrix was already computed above (before the 360° background draw) and is reused.
+        drawEyeScene(mvpMatrix, current, useVideo, drawPanel, allowBackgroundLoad = true)
+    }
+
+    /**
+     * Draws ONE eye's complete scene (360° sphere first, then the flat cinema quad) with the given
+     * MVP. Called by onDrawEye() into the Cardboard FBO, and — in FILL mode — again by
+     * onFinishFrame() straight onto the default framebuffer. Same MVP, same viewport size, same
+     * textures: an identical picture, minus the lens-distortion composite.
+     */
+    private fun drawEyeScene(
+        mvp: FloatArray,
+        s: VrSettings,
+        useVideo: Boolean,
+        drawPanel: Boolean,
+        allowBackgroundLoad: Boolean,
+    ) {
+        drawBackground(s, mvp, allowBackgroundLoad)
+        if (!drawPanel) return
+        val handles = (if (useVideo) video else panel) ?: return
+        if (vertexCount == 0) return
+
         GLES20.glUseProgram(handles.program)
-        GLES20.glUniformMatrix4fv(handles.mvp, 1, false, mvpMatrix, 0)
-        GLES20.glUniform1f(handles.brightness, current.brightness)
+        GLES20.glUniformMatrix4fv(handles.mvp, 1, false, mvp, 0)
+        GLES20.glUniform1f(handles.brightness, s.brightness)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glUniform1i(handles.texture, 0)
 
         if (useVideo) {
-            // Horizontal mirror / vertical flip live in the STREAM QUAD's texture coordinates
-            // (built in rebuildMesh), NOT in the status panel, the menu or the 360° sphere.
-            // Pure Kotlin geometry change: no GLSL shader source is touched, and the
-            // SurfaceTexture transform matrix is left completely intact. Mutating stMatrix[0]
-            // (the old approach) ignored crops/translations and pushed the picture off-centre.
+            // Horizontal mirror / vertical flip live in the STREAM QUAD's texCoords (rebuildMesh),
+            // NOT in the status panel, the menu or the 360° sphere. No GLSL change, and the
+            // SurfaceTexture transform matrix is left intact.
             GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, stMatrix, 0)
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTextureId)
         } else {
-            // PANEL_FLIP_Y stays 0: panel/menu are ordinary GL_TEXTURE_2D bitmaps whose first row
-            // is already at t=0. Flipping them here would turn the base UI upside down.
+            // PANEL_FLIP_Y stays 0: panel/menu are ordinary GL_TEXTURE_2D bitmaps.
             GLES20.glUniform1f(handles.flip, PANEL_FLIP_Y)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTextureId)
         }
@@ -413,10 +470,52 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
      * the VR GL SurfaceView is setZOrderOnTop(true).
      */
     override fun onFinishFrame(viewport: Viewport) {
+        // FILL overwrites the distortion composite BEFORE the fixed alignment line is drawn, so
+        // the line still lands on the true physical-screen layer at the exact centre.
+        if (settings.screenFillMode == VrScreenFillMode.FILL) {
+            drawVerticalFill(viewport, settings)
+        }
         drawScreenSpaceAlignmentLine(settings, viewport)
     }
 
-    override fun onSurfaceChanged(width: Int, height: Int) = Unit
+    /**
+     * FILL: replays both eyes as edge-to-edge rectangles on the DEFAULT framebuffer. Cardboard's
+     * FBO viewports are already (0,0,w/2,h) and (w/2,0,w/2,h); reusing the SAME sizes here gives
+     * 100% vertical fill with no rounded corners / vignette / centre gap and a near-square viewport
+     * per eye on a landscape phone. Both cached MVPs differ, so stereo depth is preserved — this
+     * is NOT setStereoRenderMode(false) and NOT a monocular 2D direct display.
+     */
+    private fun drawVerticalFill(viewport: Viewport, s: VrSettings) {
+        if (frameMvpCount == 0) return
+        val w = if (viewport.width > 0) viewport.width else surfaceWidth
+        val h = if (viewport.height > 0) viewport.height else surfaceHeight
+        if (w <= 0 || h <= 0) return
+
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glViewport(0, 0, w, h)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        if (frameMvpCount == 1) {
+            // Monocular (SIMULATION): one eye, one full-screen viewport.
+            drawEyeScene(frameMvps[0], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
+        } else {
+            val half = w / 2
+            GLES20.glViewport(0, 0, half, h)
+            drawEyeScene(frameMvps[0], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
+            GLES20.glViewport(half, 0, w - half, h)
+            drawEyeScene(frameMvps[1], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
+        }
+    }
+
+    /** The SDK forwards the REAL GL surface size here (and calls setScreenParams on it). */
+    override fun onSurfaceChanged(width: Int, height: Int) {
+        surfaceWidth = width
+        surfaceHeight = height
+    }
 
     override fun onRendererShutdown() {
         Log.d(TAG, "onRendererShutdown: releasing GL resources")
@@ -450,7 +549,17 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         hintPaint = null
         selectedPaint = null
         selectedRect = null
+        menuCardPaint = null
+        menuCardStrokePaint = null
+        menuAccentPaint = null
+        menuTrackPaint = null
+        menuProgressPaint = null
+        menuTabPaint = null
+        menuGradientPaint = null
         vertexCount = 0
+        frameMvpCount = 0
+        surfaceWidth = 0
+        surfaceHeight = 0
         hasVideoFrame = false
         panelDirty = true
         forcePanelUpload = true
@@ -519,6 +628,25 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             color = Color.rgb(0, 92, 138)
         }
         selectedRect = RectF()
+
+        // Modern two-level menu: dark gradient backdrop, rounded cards, accent bars and progress
+        // tracks. Allocated exactly once; drawMenu()/drawStatus() only re-assign colours.
+        menuGradientPaint = Paint().apply {
+            shader = LinearGradient(
+                0f, 0f, PANEL_W.toFloat(), PANEL_H.toFloat(),
+                Color.rgb(10, 14, 26), Color.rgb(4, 6, 12), Shader.TileMode.CLAMP,
+            )
+        }
+        menuCardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        menuCardStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f
+        }
+        menuAccentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        menuTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        menuProgressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        menuTabPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
         // Allocate texture storage once. Later refreshes use texSubImage2D (no reallocation).
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
         return ids[0]
@@ -571,72 +699,207 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         panelDirty = false
     }
 
+    /** Modern status board, shown only when there is no stream and the menu is closed. */
     private fun drawStatus(canvas: Canvas, s: VrSettings) {
-        val border = borderPaint ?: return
+        val card = menuCardPaint ?: return
+        val stroke = menuCardStrokePaint ?: return
+        val accent = menuAccentPaint ?: return
         val title = titlePaint ?: return
         val body = bodyPaint ?: return
         val hint = hintPaint ?: return
-        canvas.drawPaint(panelBackgroundPaint ?: return)
-        canvas.drawRect(2f, 2f, PANEL_W - 2f, PANEL_H - 2f, border)
-        canvas.drawText("OpenNOW VR", 28f, 56f, title)
-        canvas.drawText("2D 平面影院 · 纯黑背景", 28f, 96f, body)
-        canvas.drawText("串流开始后，画面会显示在这块平面幕布上", 28f, 132f, body)
+        val rect = selectedRect ?: return
+        val c = MENU_COLORS
+
+        canvas.drawPaint(menuGradientPaint ?: return)
+        accent.color = c[4]
+        canvas.drawRoundRect(24f, 20f, 30f, 58f, 3f, 3f, accent)
+        title.color = c[6]
+        title.textSize = 30f
+        canvas.drawText("OpenNOW VR", 44f, 46f, title)
+        hint.color = c[7]
+        hint.textSize = 15f
+        canvas.drawText("半 VR 影院 · 平面 2D 串流", 44f, 70f, hint)
+
+        card.color = c[2]
+        stroke.color = c[3]
+        rect.set(24f, 88f, 744f, 208f)
+        canvas.drawRoundRect(rect, 14f, 14f, card)
+        canvas.drawRoundRect(rect, 14f, 14f, stroke)
+        body.color = c[6]
+        body.textSize = 19f
+        canvas.drawText("串流画面会显示在这块平面幕布上", 44f, 122f, body)
+        body.color = c[7]
+        body.textSize = 17f
         canvas.drawText(
             String.format(
-                Locale.US,
-                "窗口 %.1fx    距离 %.1f m    亮度 %.2f",
+                Locale.US, "窗口 %.1f x    距离 %.1f m    亮度 %.2f",
                 s.screenScale, s.screenDistanceMeters, s.brightness,
             ),
-            28f, 236f, body,
+            44f, 156f, body,
         )
         canvas.drawText(
-            String.format(Locale.US, "曲面 %.1f    偏移 %.1f    模式 %s", s.curvature, s.screenVerticalOffset,
-                if (s.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"),
-            28f, 274f, body,
+            String.format(
+                Locale.US, "曲面 %.1f    偏移 %+.1f    填充 %s",
+                s.curvature, s.screenVerticalOffset,
+                VrMenuModel.display(s, VrMenuItemId.SCREEN_FILL_MODE),
+            ),
+            44f, 188f, body,
         )
-        canvas.drawText("手柄 长按 START+SELECT 或 HOME：打开设置", 28f, 344f, hint)
-        canvas.drawText("系统返回键或 L1+R1：退出 VR（串流不中断）", 28f, 370f, hint)
-        canvas.drawText("不使用眼睛 / 凝视 / 头部确认", 28f, 400f, hint)
-        // NOTE: the centre alignment line is deliberately NOT drawn on this panel Canvas. It used
-        // to live here, which made it part of the VR quad texture: one line per eye, warped with
-        // the perspective quad and moving with head rotation. It is now a fixed screen-space GL
-        // overlay drawn in onFinishFrame() — see drawScreenSpaceAlignmentLine().
+
+        rect.set(24f, 220f, 744f, 326f)
+        canvas.drawRoundRect(rect, 14f, 14f, card)
+        canvas.drawRoundRect(rect, 14f, 14f, stroke)
+        hint.color = c[4]
+        hint.textSize = 17f
+        canvas.drawText("手柄操作", 44f, 250f, hint)
+        hint.color = c[7]
+        hint.textSize = 15f
+        canvas.drawText("长按 START+SELECT 或 HOME：打开设置（二级页面）", 44f, 280f, hint)
+        canvas.drawText("L1+R1 或系统返回键：退出 VR（串流不中断）", 44f, 306f, hint)
+
+        hint.color = c[7]
+        hint.textSize = 14f
+        canvas.drawText("不使用眼睛 / 凝视 / 头部确认 · 中心辅助线固定在物理屏幕层", 28f, 386f, hint)
+        // NOTE: the centre alignment line is deliberately NOT drawn on this Canvas. It is a fixed
+        // screen-space GL overlay in onFinishFrame() — see drawScreenSpaceAlignmentLine().
     }
 
+    /**
+     * MODERN TWO-LEVEL SETTINGS PANEL. Category chips on top, then ONLY the active page's rows as
+     * rounded cards with value readouts and progress tracks. Numeric rows are edited ONLY after A
+     * arms editing (banner turns into "编辑中"), and only the left stick can move a value.
+     */
     private fun drawMenu(canvas: Canvas, s: VrSettings) {
-        val border = borderPaint ?: return
         val title = titlePaint ?: return
         val label = bodyPaint ?: return
         val value = valuePaint ?: return
         val hint = hintPaint ?: return
-        val highlight = selectedPaint ?: return
+        val card = menuCardPaint ?: return
+        val stroke = menuCardStrokePaint ?: return
+        val accent = menuAccentPaint ?: return
+        val track = menuTrackPaint ?: return
+        val progress = menuProgressPaint ?: return
+        val tab = menuTabPaint ?: return
         val rect = selectedRect ?: return
-        canvas.drawPaint(panelBackgroundPaint ?: return)
-        canvas.drawRect(2f, 2f, PANEL_W - 2f, PANEL_H - 2f, border)
-        canvas.drawText("VR 设置", 26f, 50f, title)
-        canvas.drawText("B 关闭", PANEL_W - 26f - hint.measureText("B 关闭"), 48f, hint)
+        val c = MENU_COLORS
 
-        val selected = VrSession.selectedIndex.value
-        VrMenuModel.items.forEachIndexed { index, item ->
-            val column = if (index < MENU_ROWS_PER_COLUMN) 0 else 1
-            val row = index % MENU_ROWS_PER_COLUMN
-            val left = if (column == 0) 24f else 396f
-            val baseline = 96f + row * MENU_ROW_HEIGHT
-            if (index == selected) {
-                rect.set(left - 4f, baseline - 26f, left + 336f, baseline + 8f)
-                canvas.drawRoundRect(rect, 6f, 6f, highlight)
-            }
-            val textColor = if (index == selected) Color.WHITE else Color.rgb(205, 218, 232)
-            label.color = textColor
-            value.color = textColor
-            val marker = if (index == selected) "▶ " else "   "
-            canvas.drawText(marker + item.label, left + 4f, baseline, label)
-            val display = VrMenuModel.display(s, item.id)
-            canvas.drawText(display, left + 332f - value.measureText(display), baseline, value)
+        canvas.drawPaint(menuGradientPaint ?: return)
+
+        // ---- Header -------------------------------------------------------------------------
+        accent.color = c[4]
+        canvas.drawRoundRect(24f, 20f, 30f, 58f, 3f, 3f, accent)
+        title.color = c[6]
+        title.textSize = 30f
+        canvas.drawText("VR 设置", 44f, 46f, title)
+        val page = VrSession.menuPage.value
+        val pageNumber = VrMenuModel.pageIndex(page) + 1
+        value.color = c[4]
+        value.textSize = 17f
+        val counter = String.format(Locale.US, "%02d / %02d", pageNumber, VrMenuModel.pages.size)
+        canvas.drawText(counter, 744f - value.measureText(counter), 44f, value)
+        hint.color = c[7]
+        hint.textSize = 14f
+        val closeHint = "B 返回"
+        canvas.drawText(closeHint, 744f - hint.measureText(closeHint), 62f, hint)
+
+        // ---- Category chips (second level) --------------------------------------------------
+        val chipW = 138f
+        val chipH = 28f
+        val chipGap = 8f
+        val chipY = 70f
+        VrMenuModel.pages.forEachIndexed { i, p ->
+            val left = 24f + i * (chipW + chipGap)
+            val active = p == page
+            tab.color = if (active) c[4] else c[2]
+            rect.set(left, chipY, left + chipW, chipY + chipH)
+            canvas.drawRoundRect(rect, 14f, 14f, tab)
+            hint.color = if (active) c[1] else c[7]
+            hint.textSize = 15f
+            val chipLabel = p.title
+            canvas.drawText(
+                chipLabel,
+                left + (chipW - hint.measureText(chipLabel)) / 2f,
+                chipY + 19f,
+                hint,
+            )
         }
-        label.color = Color.rgb(205, 218, 232)
-        value.color = Color.WHITE
-        canvas.drawText("↑↓ 选择    ←→ 调整（按住 L1/R1 ×5）    A 确认", 26f, 408f, hint)
+        stroke.color = c[3]
+        rect.set(24f, 106f, 744f, 107.5f)
+        canvas.drawRoundRect(rect, 1f, 1f, stroke)
+
+        // ---- Banner: help text, or the "editing" state --------------------------------------
+        val editing = VrSession.editMode.value
+        card.color = if (editing) Color.argb(46, 77, 200, 255) else c[2]
+        rect.set(24f, 114f, 744f, 146f)
+        canvas.drawRoundRect(rect, 12f, 12f, card)
+        stroke.color = if (editing) c[4] else c[3]
+        canvas.drawRoundRect(rect, 12f, 12f, stroke)
+        hint.color = if (editing) c[4] else c[7]
+        hint.textSize = 15f
+        val banner = if (editing) {
+            "编辑中 · 左摇杆 ←→ 细调 / ↑↓ 快调 · A 完成 · B 返回"
+        } else {
+            page.subtitle + "   ·   ↑↓ 选择   ←→ 换页   A 编辑 / 开关"
+        }
+        canvas.drawText(banner, 36f, 135f, hint)
+
+        // ---- Rows (active page only) --------------------------------------------------------
+        val pageItems = VrMenuModel.itemsFor(page)
+        val selected = VrSession.selectedIndex.value
+        val firstIndex = VrMenuModel.firstIndexOf(page)
+        val rowTop0 = 154f
+        val rowH = 30f
+        pageItems.forEachIndexed { row, item ->
+            val index = firstIndex + row
+            val top = rowTop0 + row * rowH
+            val isSelected = index == selected
+            card.color = if (isSelected) Color.argb(235, 30, 42, 66) else c[2]
+            rect.set(24f, top, 744f, top + rowH - 4f)
+            canvas.drawRoundRect(rect, 10f, 10f, card)
+            stroke.color = if (isSelected) c[4] else c[3]
+            stroke.strokeWidth = if (isSelected) 2f else 1f
+            canvas.drawRoundRect(rect, 10f, 10f, stroke)
+            if (isSelected) {
+                accent.color = c[4]
+                canvas.drawRoundRect(24f, top + 2f, 28f, top + rowH - 6f, 2f, 2f, accent)
+            }
+
+            label.color = if (isSelected) c[6] else c[7]
+            label.textSize = 18f
+            val marker = if (isSelected) "▸ " else "   "
+            canvas.drawText(marker + item.label, 40f, top + 20f, label)
+
+            val display = VrMenuModel.display(s, item.id)
+            if (item.kind == VrMenuItemKind.TOGGLE) {
+                val on = VrMenuModel.rawValue(s, item.id) >= 0.5f
+                tab.color = if (on) c[4] else c[5]
+                rect.set(668f, top + 3f, 736f, top + rowH - 7f)
+                canvas.drawRoundRect(rect, 11f, 11f, tab)
+                value.color = if (on) c[1] else c[7]
+                value.textSize = 15f
+                canvas.drawText(
+                    display,
+                    668f + (68f - value.measureText(display)) / 2f,
+                    top + 20f,
+                    value,
+                )
+            } else {
+                value.color = if (isSelected) c[4] else c[6]
+                value.textSize = 17f
+                canvas.drawText(display, 736f - value.measureText(display), top + 20f, value)
+            }
+
+            if (item.kind == VrMenuItemKind.RANGE) {
+                val span = (item.max - item.min).coerceAtLeast(0.0001f)
+                val frac = ((VrMenuModel.rawValue(s, item.id) - item.min) / span).coerceIn(0f, 1f)
+                track.color = c[5]
+                rect.set(40f, top + 25f, 300f, top + 27f)
+                canvas.drawRoundRect(rect, 1f, 1f, track)
+                progress.color = if (isSelected) c[4] else c[7]
+                rect.set(40f, top + 25f, 40f + 260f * frac, top + 27f)
+                canvas.drawRoundRect(rect, 1f, 1f, progress)
+            }
+        }
     }
 
     private fun rebuildMesh() {
@@ -838,23 +1101,25 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
      * Draws the 360° sphere using the panel program (uFlip=0). Runs on the GL thread, so it also
      * owns releasing the texture when the user switches the feature off (no GL calls off-thread).
      */
-    private fun drawBackground(s: VrSettings) {
+    private fun drawBackground(s: VrSettings, mvp: FloatArray, allowBackgroundLoad: Boolean) {
         if (!s.backgroundEnabled) {
-            if (bgTextureId != 0) deleteBackgroundTexture()
+            if (allowBackgroundLoad && bgTextureId != 0) deleteBackgroundTexture()
             return
         }
         val prog = panel ?: return
         val posBuf = bgPositionBuffer ?: return
         val texBuf = bgTexCoordBuffer ?: return
         if (bgVertexCount == 0) return
-        if (bgDirty || bgTextureId == 0) {
+        // Texture (re)load is GL work: only the FBO pass (allowBackgroundLoad=true) owns it. The
+        // FILL replay must never re-decode a panorama mid-frame.
+        if (allowBackgroundLoad && (bgDirty || bgTextureId == 0)) {
             ensureBackgroundTexture()
             bgDirty = false
         }
-        if (!bgReady) return
+        if (!bgReady || bgTextureId == 0) return
 
         GLES20.glUseProgram(prog.program)
-        GLES20.glUniformMatrix4fv(prog.mvp, 1, false, mvpMatrix, 0)
+        GLES20.glUniformMatrix4fv(prog.mvp, 1, false, mvp, 0)
         GLES20.glUniform1f(prog.brightness, s.backgroundBrightness)
         GLES20.glUniform1f(prog.flip, 0f)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -979,6 +1244,18 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // of the bottom hint (408) on the 432px-tall panel.
         const val MENU_ROWS_PER_COLUMN = 10
         const val MENU_ROW_HEIGHT = 30f
+
+        /** [gradient start, gradient end, card, stroke, accent, track, primary text, muted text]. */
+        val MENU_COLORS: IntArray = intArrayOf(
+            Color.rgb(10, 14, 26),
+            Color.rgb(4, 6, 12),
+            Color.rgb(22, 30, 46),
+            Color.rgb(58, 74, 100),
+            Color.rgb(77, 200, 255),
+            Color.rgb(40, 52, 74),
+            Color.rgb(235, 243, 255),
+            Color.rgb(140, 160, 185),
+        )
 
         /**
          * Status panel / menu are ordinary GL_TEXTURE_2D bitmaps. VrScreenGeometry emits top v=0 /

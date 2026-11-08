@@ -30,6 +30,11 @@ class VrSettingsStore(context: Context) {
         backgroundImageUri = prefs.getString(K_BG_URI, VrSettings.DEFAULT.backgroundImageUri) ?: "",
         backgroundBrightness = prefs.getFloat(K_BG_BRIGHT, VrSettings.DEFAULT.backgroundBrightness),
         ipdScale = prefs.getFloat(K_IPD_SCALE, VrSettings.DEFAULT.ipdScale),
+        screenFillMode = runCatching {
+            VrScreenFillMode.valueOf(
+                prefs.getString(K_FILL_MODE, VrSettings.DEFAULT.screenFillMode.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.screenFillMode),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -53,6 +58,7 @@ class VrSettingsStore(context: Context) {
             .putString(K_BG_URI, s.backgroundImageUri)
             .putFloat(K_BG_BRIGHT, s.backgroundBrightness)
             .putFloat(K_IPD_SCALE, s.ipdScale)
+            .putString(K_FILL_MODE, s.screenFillMode.name)
             .apply()
     }
 
@@ -75,5 +81,6 @@ class VrSettingsStore(context: Context) {
         const val K_BG_URI = "backgroundImageUri"
         const val K_BG_BRIGHT = "backgroundBrightness"
         const val K_IPD_SCALE = "ipdScale"
+        const val K_FILL_MODE = "screenFillMode"
     }
 }

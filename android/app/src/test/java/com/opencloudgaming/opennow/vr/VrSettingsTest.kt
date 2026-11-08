@@ -76,4 +76,12 @@ class VrSettingsTest {
         assertEquals(true, toggled.verticalFlip)
         assertEquals(true, toggled.showCenterAlignmentLine)
     }
+
+    @Test
+    fun screenFillModeDefaultsAndSurvivesSanitize() {
+        val defaults = VrSettings.DEFAULT
+        assertEquals(VrScreenFillMode.FILL, defaults.screenFillMode)
+        val toggled = VrSettings(screenFillMode = VrScreenFillMode.DISTORTED).sanitized()
+        assertEquals(VrScreenFillMode.DISTORTED, toggled.screenFillMode)
+    }
 }

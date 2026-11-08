@@ -129,20 +129,35 @@ class VrGamepadRouterTest {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
         assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP))
         assertEquals(VrCommand.MoveSelection(1), press(r, VrKeys.DPAD_DOWN))
-        assertEquals(VrCommand.Adjust(-1), press(r, VrKeys.DPAD_LEFT))
-        assertEquals(VrCommand.Adjust(1), press(r, VrKeys.DPAD_RIGHT))
+        assertEquals(VrCommand.ChangePage(-1), press(r, VrKeys.DPAD_LEFT))
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.DPAD_RIGHT))
         assertEquals(VrCommand.Confirm, press(r, VrKeys.DPAD_CENTER))
         assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_X))
         assertEquals(VrCommand.Consumed, release(r, VrKeys.BUTTON_X))
     }
 
     @Test
-    fun shoulderHeldMultipliesAdjustmentByFive() {
-        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
-        // L2 is a fast-adjust modifier, not a VR-toggle combo key: it is swallowed by the panel.
-        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_L2))
-        assertEquals(VrCommand.Adjust(-5), press(r, VrKeys.DPAD_LEFT))
-        assertEquals(VrCommand.Adjust(5), press(r, VrKeys.DPAD_RIGHT))
+    fun verticalStickAdjustsCoarsely() {
+        val r = VrGamepadRouter().also { it.menuOpen = true }
+        // Vertical stick deflection uses coarse steps (5). Space the events past menuRepeatMs so
+        // the router's rate limiter does not swallow the second one.
+        assertEquals(VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS), r.onAxis(0f, 0.9f, 0L))
+        assertEquals(VrCommand.Adjust(-VrGamepadRouter.STICK_COARSE_STEPS), r.onAxis(0f, -0.9f, 1000L))
+    }
+
+    @Test
+    fun horizontalStickAdjustsFinely() {
+        val r = VrGamepadRouter().also { it.menuOpen = true }
+        // Horizontal stick deflection uses one fine step.
+        assertEquals(VrCommand.Adjust(-1), r.onAxis(-0.9f, 0f, 0L))
+        assertEquals(VrCommand.Adjust(1), r.onAxis(0.9f, 0f, 1000L))
+    }
+
+    @Test
+    fun stickAdjustIsConsumedButOnlyChangesValueWhenEditingArmed() {
+        val r = VrGamepadRouter().also { it.menuOpen = true }
+        // The router emits Adjust; VrSession drops it unless editing is armed.
+        assertEquals(VrCommand.Adjust(1), r.onAxis(0.9f, 0f, 0L))
     }
 
     @Test
@@ -164,11 +179,12 @@ class VrGamepadRouterTest {
     }
 
     @Test
-    fun verticalAxisMovesSelectionWithRepeatDelay() {
+    fun verticalAxisCoarselyAdjustsWithRepeatDelay() {
         val r = VrGamepadRouter().also { it.menuOpen = true; it.repeatMs = 140L }
-        assertEquals(VrCommand.MoveSelection(1), r.onAxis(0f, 0.9f, 1000L))
+        val coarse = VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS)
+        assertEquals(coarse, r.onAxis(0f, 0.9f, 1000L))
         assertEquals(VrCommand.Consumed, r.onAxis(0f, 0.9f, 1050L))
-        assertEquals(VrCommand.MoveSelection(1), r.onAxis(0f, 0.9f, 1200L))
+        assertEquals(coarse, r.onAxis(0f, 0.9f, 1200L))
     }
 
     @Test
@@ -182,7 +198,10 @@ class VrGamepadRouterTest {
         val r = VrGamepadRouter().also { it.menuOpen = true }
         r.onAxis(0f, 0.9f, 1000L)
         assertEquals(VrCommand.Consumed, r.onAxis(0f, 0f, 1050L))
-        assertEquals(VrCommand.MoveSelection(1), r.onAxis(0f, 0.9f, 1060L))
+        assertEquals(
+            VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS),
+            r.onAxis(0f, 0.9f, 1060L),
+        )
     }
 
     @Test

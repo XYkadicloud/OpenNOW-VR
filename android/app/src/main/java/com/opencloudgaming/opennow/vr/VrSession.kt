@@ -27,6 +27,14 @@ object VrSession {
     private val _menuOpen = MutableStateFlow(false)
     val menuOpen: StateFlow<Boolean> = _menuOpen.asStateFlow()
 
+    /** Active second-level settings page (category chip). */
+    private val _menuPage = MutableStateFlow(VrMenuModel.pages.first())
+    val menuPage: StateFlow<VrMenuPage> = _menuPage.asStateFlow()
+
+    /** True only after A armed value editing on a RANGE row; the left stick is gated on this. */
+    private val _editMode = MutableStateFlow(false)
+    val editMode: StateFlow<Boolean> = _editMode.asStateFlow()
+
     private val _selectedIndex = MutableStateFlow(0)
     val selectedIndex: StateFlow<Int> = _selectedIndex.asStateFlow()
 
@@ -79,10 +87,25 @@ object VrSession {
     fun setMenuOpen(value: Boolean) {
         _menuOpen.value = value
         router.menuOpen = value
+        if (!value) _editMode.value = false
     }
 
+    /** Switches the second-level page and lands selection on its first row. */
+    fun setMenuPage(page: VrMenuPage) {
+        _menuPage.value = page
+        _editMode.value = false
+        _selectedIndex.value = VrMenuModel.firstIndexOf(page)
+    }
+
+    fun changePage(delta: Int) {
+        val index = VrMenuModel.pageIndex(_menuPage.value) + delta
+        val clamped = index.coerceIn(0, VrMenuModel.pages.lastIndex)
+        setMenuPage(VrMenuModel.pages[clamped])
+    }
+
+    /** Selection never leaves the active page: D-pad cannot jump into another category. */
     fun setSelectedIndex(index: Int) {
-        _selectedIndex.value = index.coerceIn(0, VrMenuModel.items.lastIndex)
+        _selectedIndex.value = VrMenuModel.clampToPage(index, _menuPage.value)
     }
 
     fun updateSettings(value: VrSettings) {
@@ -115,9 +138,18 @@ object VrSession {
             setSelectedIndex(_selectedIndex.value + command.delta)
             true
         }
+        is VrCommand.ChangePage -> {
+            changePage(command.delta)
+            true
+        }
         is VrCommand.Adjust -> {
+            // Numeric values move ONLY while A has armed editing (see VrMenuModel.adjustIfEditing).
+            // While disarmed the gate returns the SAME object, so we skip the SharedPreferences
+            // write entirely instead of hammering disk with every analogue-stick motion event.
+            val before = _settings.value
             val id = VrMenuModel.items[_selectedIndex.value].id
-            updateSettings(VrMenuModel.adjust(_settings.value, id, command.steps))
+            val after = VrMenuModel.adjustIfEditing(before, id, command.steps, _editMode.value)
+            if (after !== before && after != before) updateSettings(after)
             true
         }
     }
@@ -125,10 +157,14 @@ object VrSession {
     private fun confirmSelected() {
         val id = VrMenuModel.items[_selectedIndex.value].id
         when (id) {
-            VrMenuItemId.SCAN_QR -> onScanQr?.invoke()
-            VrMenuItemId.RESET_DEFAULTS -> updateSettings(VrSettings.DEFAULT)
-            VrMenuItemId.EXIT_VR -> setEnabled(false)
-            else -> updateSettings(VrMenuModel.activate(_settings.value, id))
+            // These two have host side effects; the rest are pure settings changes.
+            VrMenuItemId.SCAN_QR -> { onScanQr?.invoke(); return }
+            VrMenuItemId.EXIT_VR -> { setEnabled(false); return }
+            else -> {
+                val result = VrMenuModel.confirm(_settings.value, id, _editMode.value)
+                updateSettings(result.settings)
+                _editMode.value = result.editing
+            }
         }
     }
 

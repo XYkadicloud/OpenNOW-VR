@@ -53,5 +53,6 @@ object VrKeys {
     /** Single press closes the panel while it is open. */
     val MENU_CLOSE_KEYS = intArrayOf(BUTTON_SELECT, BUTTON_START, BUTTON_MODE)
 
-    val FAST_ADJUST_KEYS = intArrayOf(BUTTON_L1, BUTTON_R1, BUTTON_L2, BUTTON_R2)
+    // NOTE: shoulder-key "fast adjust" was retired when numeric editing moved to the left stick
+    // behind an A-armed edit mode. D-pad left/right now switches the settings PAGE instead.
 }

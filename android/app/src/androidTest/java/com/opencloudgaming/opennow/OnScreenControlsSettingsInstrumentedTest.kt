@@ -268,6 +268,7 @@ class OnScreenControlsSettingsInstrumentedTest {
                         onBugReportVersionCheck = { },
                         onOpenUpdate = { },
                         onButtonTone = { },
+                        onEnterVr = { },
                         onClose = {},
                     )
                 }

@@ -2,36 +2,24 @@ package com.opencloudgaming.opennow.vr
 
 import android.util.Log
 import android.view.View
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Compose host placed AFTER OpenNowApp() in MainActivity's root Box.
  *
- * NO permanent floating settings UI: all VR controls live in the app's own settings screen
- * (`VrSettingsSection` inside `OpenNowSettingsScreens.kt`). While VR is on, nothing is drawn on
- * top of the picture at all — the user exits with the system BACK key or the gamepad shortcut,
- * which restores the flat 2D UI (and the soft keyboard) without interrupting the stream.
- *
- * The only overlay is a small "进入 VR" affordance shown in 2D mode, so a user without a gamepad
- * can still start VR. It disappears completely once VR is active.
+ * NO permanent floating settings UI and NO floating "进入 VR" button: all VR controls live in
+ * the app's own settings screen (`VrSettingsSection` inside `OpenNowSettingsScreens.kt`) and the
+ * stream Quick Menu (see OpenNowStreamControls.kt). While VR is on, nothing is drawn on top of
+ * the picture at all — the user exits with the system BACK key or the gamepad shortcut, which
+ * restores the flat 2D UI (and the soft keyboard) without interrupting the stream.
  *
  * LIFECYCLE (root cause fix, 2026-11-06) — DO NOT reintroduce a shared viewRef:
  *  An earlier version held `var viewRef` at VrModeHost scope and cleaned it up in
@@ -52,18 +40,6 @@ fun VrModeHost() {
     Box(modifier = Modifier.fillMaxSize()) {
         if (enabled) {
             VrTheaterHost(settings)
-        } else {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(10.dp)
-                    .alpha(0.55f)
-                    .background(Color(0x99000000), RoundedCornerShape(6.dp))
-                    .clickable { VrSession.setEnabled(true) }
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
-            ) {
-                Text(text = "进入 VR", color = Color.White, fontSize = 12.sp)
-            }
         }
     }
 }

@@ -8,7 +8,7 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(21, VrMenuModel.items.size)
+        assertEquals(22, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -157,5 +157,113 @@ class VrMenuModelTest {
             VrMenuModel.adjust(s, VrMenuItemId.IPD_SCALE, -10_000).ipdScale,
             1e-4f,
         )
+    }
+
+    @Test
+    fun screenFillModeTogglesBetweenDistortedAndFill() {
+        val s = VrSettings.DEFAULT
+        assertEquals(VrScreenFillMode.FILL, s.screenFillMode)
+        val toggled = VrMenuModel.activate(s, VrMenuItemId.SCREEN_FILL_MODE)
+        assertEquals(VrScreenFillMode.DISTORTED, toggled.screenFillMode)
+        val toggledBack = VrMenuModel.activate(toggled, VrMenuItemId.SCREEN_FILL_MODE)
+        assertEquals(VrScreenFillMode.FILL, toggledBack.screenFillMode)
+    }
+
+    @Test
+    fun newToggleRowsAreReversible() {
+        val s = VrSettings.DEFAULT
+        assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.HORIZONTAL_MIRROR).horizontalMirror)
+        assertEquals(
+            false,
+            VrMenuModel.activate(s.copy(horizontalMirror = true), VrMenuItemId.HORIZONTAL_MIRROR)
+                .horizontalMirror,
+        )
+        assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.VERTICAL_FLIP).verticalFlip)
+        assertEquals(
+            false,
+            VrMenuModel.activate(s.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP)
+                .verticalFlip,
+        )
+    }
+
+    @Test
+    fun pageStructureIsValid() {
+        assertEquals(5, VrMenuModel.pages.size)
+        assertEquals("画面", VrMenuModel.pages[0].title)
+        assertEquals("观看", VrMenuModel.pages[1].title)
+        assertEquals("操作", VrMenuModel.pages[2].title)
+        assertEquals("环境", VrMenuModel.pages[3].title)
+        assertEquals("快捷", VrMenuModel.pages[4].title)
+    }
+
+    @Test
+    fun itemsForPageReturnsCorrectSublists() {
+        val displayItems = VrMenuModel.itemsFor(VrMenuModel.pages[0])
+        assertEquals(9, displayItems.size)
+        assertEquals(VrMenuItemId.SCREEN_SCALE, displayItems.first().id)
+        assertEquals(VrMenuItemId.VERTICAL_FLIP, displayItems.last().id)
+
+        val viewItems = VrMenuModel.itemsFor(VrMenuModel.pages[1])
+        assertEquals(5, viewItems.size)
+        assertEquals(VrMenuItemId.VIEWER_MODE, viewItems.first().id)
+        assertEquals(VrMenuItemId.RECENTER, viewItems.last().id)
+    }
+
+    @Test
+    fun clampToPageKeepsSelectionInsidePage() {
+        val displayPage = VrMenuModel.pages[0]
+        val viewPage = VrMenuModel.pages[1]
+        // Clamp selection 0 (first of display page) when on view page -> should clamp to view page first
+        assertEquals(
+            VrMenuModel.firstIndexOf(viewPage),
+            VrMenuModel.clampToPage(0, viewPage)
+        )
+        // Clamp selection 21 (last item) when on display page -> should clamp to display page last
+        assertEquals(
+            VrMenuModel.lastIndexOf(displayPage),
+            VrMenuModel.clampToPage(21, displayPage)
+        )
+    }
+
+    @Test
+    fun adjustIfEditingOnlyChangesWhenEditingArmed() {
+        val s = VrSettings.DEFAULT
+        val itemId = VrMenuItemId.SCREEN_SCALE
+        // Not editing -> no change
+        assertEquals(s, VrMenuModel.adjustIfEditing(s, itemId, 5, editing = false))
+        // Editing -> changes
+        val changed = VrMenuModel.adjustIfEditing(s, itemId, 1, editing = true)
+        assertEquals(s.screenScale + VrRanges.SCREEN_SCALE_STEP, changed.screenScale, 1e-5f)
+    }
+
+    @Test
+    fun confirmOnRangeTogglesEditingWithoutChangingValue() {
+        val s = VrSettings.DEFAULT
+        val itemId = VrMenuItemId.SCREEN_SCALE
+        // Not editing -> A arms editing
+        val result = VrMenuModel.confirm(s, itemId, editing = false)
+        assertEquals(s, result.settings)
+        assertEquals(true, result.editing)
+        // Editing -> A disarms editing
+        val result2 = VrMenuModel.confirm(s, itemId, editing = true)
+        assertEquals(s, result2.settings)
+        assertEquals(false, result2.editing)
+    }
+
+    @Test
+    fun confirmOnToggleFlipsImmediatelyAndDisarmsEditing() {
+        val s = VrSettings.DEFAULT
+        val itemId = VrMenuItemId.HORIZONTAL_MIRROR
+        val result = VrMenuModel.confirm(s, itemId, editing = true)
+        assertEquals(true, result.settings.horizontalMirror)
+        assertEquals(false, result.editing)
+    }
+
+    @Test
+    fun confirmOnActionExecutesAndDisarmsEditing() {
+        val s = VrSettings(screenScale = 2.5f, brightness = 0.5f)
+        val result = VrMenuModel.confirm(s, VrMenuItemId.RESET_DEFAULTS, editing = true)
+        assertEquals(VrSettings.DEFAULT, result.settings)
+        assertEquals(false, result.editing)
     }
 }

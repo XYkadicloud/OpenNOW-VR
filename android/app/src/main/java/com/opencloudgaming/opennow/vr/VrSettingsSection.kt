@@ -60,6 +60,20 @@ fun VrSettingsSection() {
                 "退出后可直接使用手机软键盘。VR 内操作只用物理手柄，没有眼睛/凝视操控。",
         ) { VrSession.setEnabled(it) }
 
+        SettingSwitch(
+            label = "画面上下填满（方形 / 去遮罩）",
+            checked = settings.screenFillMode == VrScreenFillMode.FILL,
+            description = "开启：左右眼各占满半个屏幕、上下顶满，画面变成规整方形，去掉圆角暗角和上下大黑边。" +
+                "关闭：回到之前的版本（Cardboard 原版镜头畸变校正，适配纸盒镜片，但四周有黑边）。" +
+                "两种方式都是双目立体，随时可切换；若戴纸盒看边缘变形明显，关掉即可回到原版。",
+        ) { checked ->
+            VrSession.updateSettings(
+                settings.copy(
+                    screenFillMode = if (checked) VrScreenFillMode.FILL else VrScreenFillMode.DISTORTED,
+                ),
+            )
+        }
+
         VrSettingSpecs.ALL.forEach { spec ->
             NumberSlider(
                 label = spec.label,

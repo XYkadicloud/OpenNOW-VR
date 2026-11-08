@@ -98,6 +98,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
+import com.opencloudgaming.opennow.vr.VrSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -1476,6 +1477,12 @@ internal fun StreamScreen(
                     onBugReportVersionCheck = viewModel::verifyBugReportVersion,
                     onOpenUpdate = viewModel::performAndroidUpdatePrimaryAction,
                     onButtonTone = playButtonTone,
+                    onEnterVr = {
+                        // Close the Quick Menu first: otherwise it is still open behind the VR
+                        // surface and would be sitting there when the user exits VR again.
+                        controlsOpen = false
+                        VrSession.setEnabled(true)
+                    },
                     highlightDone = streamGuideOpen && streamGuideStep == StreamGuideStep.PressDone,
                     onClose = {
                         controlsOpen = false

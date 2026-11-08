@@ -810,6 +810,7 @@ internal fun StreamControlsPanel(
     onBugReportVersionCheck: () -> Unit,
     onOpenUpdate: () -> Unit,
     onButtonTone: () -> Unit,
+    onEnterVr: () -> Unit,
     highlightDone: Boolean = false,
     onClose: () -> Unit,
 ) {
@@ -1242,6 +1243,13 @@ internal fun StreamControlsPanel(
                         },
                     )
                 }
+            }
+            item {
+                ControlActionRow(
+                    label = "进入 VR",
+                    actionLabel = "进入",
+                    onClick = { onButtonTone(); onEnterVr() },
+                )
             }
             item {
                 ControlActionRow(

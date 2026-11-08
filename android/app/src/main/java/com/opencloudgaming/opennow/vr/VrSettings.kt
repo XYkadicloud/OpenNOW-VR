@@ -3,6 +3,26 @@ package com.opencloudgaming.opennow.vr
 /** Rendering mode. CARDBOARD = stereo + lens distortion; SIMULATION = monocular, bare-phone. */
 enum class VrViewerMode { CARDBOARD, SIMULATION }
 
+/**
+ * How the stereo picture occupies the PHYSICAL screen (the "全屏填充" control).
+ *
+ * DISTORTED = original Cardboard path. CardboardView.onRenderStereoFrame() calls
+ * renderEyeToDisplay(), which warps both eyes through a lens-distortion mesh. That mesh is built
+ * from a FOV clamped to the device params (lens_distortion.cc:189-194), so it only covers the
+ * middle of the screen: large BLACK BANDS above/below and a gap between the two eyes. This is the
+ * round/barrel look in the user's screenshot.
+ *
+ * FILL = keep BOTH eyes (real stereo), but bypass that distortion composite. onFinishFrame()
+ * re-draws each eye into a rectangular half-screen viewport (w/2 x FULL height) using the very
+ * same eye MVP the SDK used for the FBO. The FBO content is already full-height, so the result is
+ * edge-to-edge vertically, with no rounded corners, no vignette and no centre gap.
+ *
+ * This is NOT "monocular / direct 2D display": both eye matrices are still used, so stereo depth
+ * is preserved. Fully adjustable and revertible; DEFAULT is FILL because that is the requested
+ * behaviour.
+ */
+enum class VrScreenFillMode { DISTORTED, FILL }
+
 /** Numeric bounds for every adjustable VR parameter. Kept here so UI, storage and tests agree. */
 object VrRanges {
     const val SCREEN_SCALE_MIN = 0.5f
@@ -97,6 +117,12 @@ data class VrSettings(
      * NO SDK device-parameter mutation. MONOCULAR/SIMULATION mode is unaffected.
      */
     val ipdScale: Float = 1.0f,
+    /**
+     * DISTORTED = original Cardboard stereo + lens-distortion mesh (round vignette, big black
+     * bands top/bottom). FILL = both eyes retained, distortion composite bypassed, rectangular
+     * half-screen viewports with FULL height — i.e. "上下填满 / 没有大黑边".
+     */
+    val screenFillMode: VrScreenFillMode = VrScreenFillMode.FILL,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -121,6 +147,7 @@ data class VrSettings(
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
         ),
         ipdScale = ipdScale.coerceIn(VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX),
+        screenFillMode = screenFillMode,
     )
 
     companion object {

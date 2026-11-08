@@ -306,6 +306,7 @@ import com.opencloudgaming.opennow.ui.theme.OpenNowSpacing
 import com.opencloudgaming.opennow.ui.theme.OpenNowTypography
 import com.opencloudgaming.opennow.ui.theme.numeric
 import com.opencloudgaming.opennow.ui.theme.tint
+import com.opencloudgaming.opennow.vr.VrSession
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -1325,6 +1326,7 @@ private fun MainShell(
                                         }
                                     },
                                     showChromeScrim = portraitChrome,
+                                    onEnterVr = { VrSession.setEnabled(true) },
                                 ) {
                                     if (storeControlsInTopBar) {
                                         Spacer(Modifier.weight(1f))
@@ -2031,6 +2033,7 @@ private fun TopStatusBar(
     refreshing: Boolean = false,
     onRefresh: () -> Unit = {},
     showChromeScrim: Boolean = true,
+    onEnterVr: () -> Unit = {},
     content: @Composable RowScope.() -> Unit = {},
 ) {
     val barScrim = if (showChromeScrim) ChromeScrim else Color.Transparent
@@ -2090,6 +2093,16 @@ private fun TopStatusBar(
                 ) {
                     Text(stringResource(R.string.action_resume), style = MaterialTheme.typography.labelMedium)
                 }
+            }
+            // Dedicated native "enter VR" button in the app chrome (NOT a floating overlay that
+            // can be hit by accident). Always visible on the outer pages; inside a stream the
+            // Quick Menu carries its own entry instead.
+            Spacer(Modifier.width(6.dp))
+            ElevatedButton(
+                onClick = onEnterVr,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp),
+            ) {
+                Text("进入 VR", style = MaterialTheme.typography.labelMedium)
             }
         }
     }

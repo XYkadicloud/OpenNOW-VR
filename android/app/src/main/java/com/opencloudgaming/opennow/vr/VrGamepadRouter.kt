@@ -16,6 +16,9 @@ sealed class VrCommand {
     object CloseMenu : VrCommand()
     object Confirm : VrCommand()
     data class MoveSelection(val delta: Int) : VrCommand()
+    /** D-pad LEFT/RIGHT switch the second-level settings PAGE (never change a value). */
+    data class ChangePage(val delta: Int) : VrCommand()
+    /** Left stick only. VrSession gated by "A armed editing"; no D-pad ever emits this. */
     data class Adjust(val steps: Int) : VrCommand()
 }
 
@@ -29,8 +32,11 @@ sealed class VrCommand {
  *    in game can never open it. Short presses pass straight through to the game unchanged. The
  *    hold timer starts on the initial ACTION_DOWN that completes the combination, NOT on the first
  *    OS key-repeat (see the note in onKey for why).
- *  - When the panel is open, D-pad / shoulder / face buttons / left stick drive the panel only,
- *    and a single press of B / SELECT / START / MODE closes it.
+ *  - When the panel is open, D-pad UP/DOWN only SELECTS a row, D-pad LEFT/RIGHT only switches the
+ *    second-level PAGE, A arms value editing / flips a switch, B closes the panel. NUMERIC VALUES
+ *    are changed ONLY by the left analogue stick AND ONLY while A has armed editing (that gate is
+ *    VrMenuModel.adjustIfEditing, enforced in VrSession). This is deliberate: it makes accidental
+ *    slider drift impossible.
  *
  * No Android framework types are used here; VrKeys holds plain Int constants so JVM unit tests run
  * without Robolectric or mocked Android stubs.
@@ -73,7 +79,7 @@ class VrGamepadRouter {
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
 
         val alreadyDown = !pressed.add(keyCode)
-        // L1+R1 toggles VR. It is disabled while the menu is open (shoulders are fast-adjust there).
+        // L1+R1 toggles VR. It is disabled while the menu is open (shoulders are swallowed there).
         if (!menuOpen && comboPressed()) {
             if (!comboFired) {
                 comboFired = true
@@ -132,8 +138,11 @@ class VrGamepadRouter {
     }
 
     /**
-     * Left analogue stick while the menu is open. Axis events are consumed (never forwarded to
-     * the game) so adjusting a slider does not also move the in-game camera.
+     * Left analogue stick while the menu is open. It ONLY adjusts the numeric value of the
+     * selected row: horizontal = one step, vertical = five steps (coarse). VrSession drops the
+     * command unless A has armed editing, so merely resting a thumb on the stick changes nothing.
+     * Axis events are consumed (never forwarded to the game) so adjusting a slider does not also
+     * move the in-game camera.
      */
     fun onAxis(x: Float, y: Float, timeMs: Long): VrCommand {
         if (!menuOpen) return VrCommand.PassThrough
@@ -146,7 +155,7 @@ class VrGamepadRouter {
         if (lastAxisMs != Long.MIN_VALUE && timeMs - lastAxisMs < repeatMs) return VrCommand.Consumed
         lastAxisMs = timeMs
         return if (ay >= ax) {
-            VrCommand.MoveSelection(if (y < 0f) -1 else 1)
+            VrCommand.Adjust(if (y < 0f) -STICK_COARSE_STEPS else STICK_COARSE_STEPS)
         } else {
             VrCommand.Adjust(if (x < 0f) -1 else 1)
         }
@@ -155,17 +164,14 @@ class VrGamepadRouter {
     private fun menuKey(keyCode: Int): VrCommand = when (keyCode) {
         VrKeys.DPAD_UP -> VrCommand.MoveSelection(-1)
         VrKeys.DPAD_DOWN -> VrCommand.MoveSelection(1)
-        VrKeys.DPAD_LEFT -> VrCommand.Adjust(-fastMultiplier())
-        VrKeys.DPAD_RIGHT -> VrCommand.Adjust(fastMultiplier())
+        VrKeys.DPAD_LEFT -> VrCommand.ChangePage(-1)
+        VrKeys.DPAD_RIGHT -> VrCommand.ChangePage(1)
         VrKeys.BUTTON_A, VrKeys.DPAD_CENTER -> VrCommand.Confirm
         // B, SELECT, START and MODE all close the panel so a user without a B button is not trapped.
         VrKeys.BUTTON_B -> VrCommand.CloseMenu
         in VrKeys.MENU_CLOSE_KEYS -> VrCommand.CloseMenu
         else -> VrCommand.Consumed
     }
-
-    private fun fastMultiplier(): Int =
-        if (VrKeys.FAST_ADJUST_KEYS.any { pressed.contains(it) }) 5 else 1
 
     private fun comboPressed(): Boolean = VrKeys.VR_TOGGLE_COMBOS.any { (a, b) ->
         pressed.contains(a) && pressed.contains(b)
@@ -183,16 +189,18 @@ class VrGamepadRouter {
         menuHoldFired = false
     }
 
-    private companion object {
+    companion object {
+        /** Vertical stick deflection is a coarse adjustment; horizontal is one fine step. */
+        const val STICK_COARSE_STEPS = 5
+
         /**
-         * Only navigation directions repeat while held. A/B/SELECT must not: OS key-repeat would
-         * otherwise confirm a setting or close the panel dozens of times per second.
+         * Only UP/DOWN repeat while held (scrolling rows). A/B/SELECT must not, and neither may
+         * LEFT/RIGHT: those switch the second-level PAGE, and OS key-repeat would otherwise fling
+         * the user to the first/last category from a single held press.
          */
         val REPEATABLE_MENU_KEYS = intArrayOf(
             VrKeys.DPAD_UP,
             VrKeys.DPAD_DOWN,
-            VrKeys.DPAD_LEFT,
-            VrKeys.DPAD_RIGHT,
         )
 
         /** Safety floor so a very small menuRepeatMs cannot turn into a CPU-bound spin. */
