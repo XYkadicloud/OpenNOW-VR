@@ -205,6 +205,13 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     /** Static full-screen NDC quad (TRIANGLE_STRIP); filled once in onSurfaceCreated. */
     private val zoomPositionBuffer: FloatBuffer = newFloatBuffer(12)
     private val zoomTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
+    /**
+     * Edge-triggered diagnostics for the "依然不能全屏" real-device report. Every early return in
+     * drawZoomFill() records WHY the zoom did not run, so "no visible change" is diagnosable from
+     * logcat instead of being a silent no-op. A healthy render loop stays log-silent.
+     */
+    private var logLastZoomSkip: String? = null
+    private var logLastZoomActive = false
 
     // Preallocated paints for the modern two-level menu. Allocated once in createPanelResources();
     // drawMenu()/drawStatus() only re-assign colours, so the render loop stays allocation-free.
@@ -480,8 +487,32 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // fixed screen-space alignment line last so it is never scaled with the picture.
         if (settings.screenFillMode == VrScreenFillMode.FILL) {
             drawZoomFill(viewport, settings)
+        } else {
+            // Most common real-device cause of "依然不能全屏": SharedPreferences remembered an
+            // older DISTORTED choice, so the whole zoom path is skipped before it can run.
+            noteZoomSkip("screenFillMode=DISTORTED（原版／可回退），2D 设置页把它切回「单纯放大」")
         }
         drawScreenSpaceAlignmentLine(settings, viewport)
+    }
+
+    /** Logs each distinct skip reason ONCE; a healthy FILL frame clears the skip state instead. */
+    private fun noteZoomSkip(reason: String) {
+        if (logLastZoomSkip != reason) {
+            logLastZoomSkip = reason
+            Log.w(TAG, "zoom FILL skipped: $reason")
+        }
+    }
+
+    private fun noteZoomActive(s: VrSettings, w: Int, h: Int) {
+        if (!logLastZoomActive) {
+            logLastZoomActive = true
+            Log.i(
+                TAG,
+                "zoom FILL active: ${s.zoomScale}x on ${w}x${h}, " +
+                    "snapshotMode=$zoomSnapshotMode, menuOpen=${VrSession.menuOpen.value}",
+            )
+        }
+        logLastZoomSkip = null
     }
 
     /**
@@ -501,18 +532,37 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private fun drawZoomFill(viewport: Viewport, s: VrSettings) {
         val w = if (viewport.width > 0) viewport.width else surfaceWidth
         val h = if (viewport.height > 0) viewport.height else surfaceHeight
-        if (w <= 0 || h <= 0) return
-        if (zoomCopyUnsupported) return
+        if (w <= 0 || h <= 0) {
+            noteZoomSkip("invalid viewport ${w}x${h}")
+            return
+        }
+        if (zoomCopyUnsupported) {
+            noteZoomSkip("all snapshot strategies failed on this GL context（已永久降级，保留 SDK 原画）")
+            return
+        }
         val zoom = s.zoomScale
-        if (zoom <= 1.001f) return
+        if (zoom <= 1.001f) {
+            noteZoomSkip("zoomScale=${s.zoomScale}（1.00x = 关闭放大）")
+            return
+        }
         // The settings panel is a screen-covering quad. Zooming it would crop its outer rows and
         // chips, so the composite is enlarged ONLY while streaming / on the status screen.
-        if (VrSession.menuOpen.value) return
-        val prog = panel ?: return
+        if (VrSession.menuOpen.value) {
+            noteZoomSkip("settings menu open（菜单本身不放大，关掉菜单即恢复）")
+            return
+        }
+        val prog = panel
+        if (prog == null) {
+            noteZoomSkip("panel program not ready")
+            return
+        }
 
         // 1. Snapshot the finished frame. IMPORTANT: nothing is cleared until a snapshot actually
         //    succeeds, so a driver that refuses every strategy leaves the SDK frame 100% intact.
-        if (!snapshotZoomFrame(w, h)) return
+        if (!snapshotZoomFrame(w, h)) {
+            noteZoomSkip("snapshot failed this frame（见上一条 zoom snapshot 日志）")
+            return
+        }
 
         // 2. Black behind the enlarged picture (only visible if zoom is small / aspect differs).
         GLES20.glViewport(0, 0, w, h)
@@ -546,6 +596,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // Restore the full-screen viewport. The alignment line reasserts its own anyway, but the
         // SDK may also draw after onFinishFrame() on some devices.
         GLES20.glViewport(0, 0, w, h)
+        noteZoomActive(s, w, h)
     }
 
     /**
@@ -717,6 +768,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         zoomPixels = null
         zoomPixelsWidth = 0
         zoomPixelsHeight = 0
+        // New GL context => the previous verdict/reasons no longer apply; re-log once.
+        logLastZoomSkip = null
+        logLastZoomActive = false
         if (panelTextureId != 0) {
             GLES20.glDeleteTextures(1, intArrayOf(panelTextureId), 0)
             panelTextureId = 0
@@ -925,9 +979,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         )
         canvas.drawText(
             String.format(
-                Locale.US, "曲面 %.1f    偏移 %+.1f    填充 %s",
+                Locale.US, "曲面 %.1f   偏移 %+.1f   %s %.2fx",
                 s.curvature, s.screenVerticalOffset,
-                VrMenuModel.display(s, VrMenuItemId.SCREEN_FILL_MODE),
+                VrMenuModel.display(s, VrMenuItemId.SCREEN_FILL_MODE), s.zoomScale,
             ),
             44f, 188f, body,
         )
@@ -941,7 +995,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         hint.color = c[7]
         hint.textSize = 15f
         canvas.drawText("长按 START+SELECT 或 HOME：打开设置（二级页面）", 44f, 280f, hint)
-        canvas.drawText("L1+R1 或系统返回键：退出 VR（串流不中断）", 44f, 306f, hint)
+        canvas.drawText("系统返回键 / 设置「退出 VR」退出 · L1+R1 只进入", 44f, 306f, hint)
 
         hint.color = c[7]
         hint.textSize = 14f

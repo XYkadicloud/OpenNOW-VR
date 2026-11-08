@@ -1202,3 +1202,77 @@ GLES2 的 `glCopyTexSubImage2D` 对格式不兼容的窗口缓冲拷贝返回 `G
   且「整体放大」滑块不在 `1.00x`（`screenFillMode` 会被 SharedPreferences 记住，
   旧版本手动关过的话升级后仍是 `DISTORTED`）。
 
+---
+
+## 18. 静态复核 + 「依然不能全屏」可诊断化（本轮续接）
+
+> 本轮起点是上下文压缩后的续接，不是新的真机 bug 报告。用户上一句「目前还行吧，然后把你目前
+> VR 相关的代码再次导出出来一次」已完成（r2 包）。本轮做的是：把最后一条未闭环反馈
+> 「依然好像是不能全屏的」做源码级静态复核，并把「静默跳过」变成可查，然后重新导出包。
+
+### 18.1 SDK 源码复核结论（重要事实，别再走回头路）
+
+查 `sdk-reference/CardboardView.java` 的 `onDrawFrame()`（1038–1088 行）与
+`onRenderStereoFrame()`（1098–1137 行），确认两件事：
+
+- **调用顺序**：`renderer.onNewFrame()` → `onRenderStereoFrame()`（其中先绑共享 FBO 画左右眼，
+  再 `cardboardViewApi.renderEyeToDisplay(...)` 做畸变合成）→ `renderer.onFinishFrame(viewport)`。
+  `onFinishFrame` 在 `onDrawFrame` 里是最后一步，之后只剩 `checkGlError("onDrawFrame")`，
+  然后 GLSurfaceView 才 `eglSwapBuffers`。所以 `onFinishFrame()` 里对默认 framebuffer 的
+  `clear + 放大重画` **就是最终上屏画面**，不会被 SDK 后续绘制覆盖。
+- **viewport 是整屏**：`viewport.setViewport(0, 0, getScreenParamsWidth(), getScreenParamsHeight())`，
+  不是左右半屏的 `w/2`。因此 `drawZoomFill()` 里的 `w/h` 是物理屏幕尺寸，
+  `glCopyTexSubImage2D` 拷的是整张最终合成图，`glViewport` 放大也是整屏居中。
+
+结论：`d09f94f` 的「单纯放大」在**时机与尺寸上都成立**。真机「看起来完全没变化」更可能是
+放大链路被某个 early return 静默跳过，或用户装的是 `d09f94f` 之前的 APK（本人已说明
+「上一个 CI 的编译中 / 最新的 CI 还没编译完」）。不要再改 FOV / 投影 / geometry / shader /
+SDK C++，也不要退回「左右眼各重画半屏矩形」的 `6cac3e3` 方向。
+
+### 18.2 本轮实际改动（只有 2 个文件，零渲染路径改动）
+
+`VrTheaterRenderer.kt`：
+
+1. **修一个确定的过时文案 bug**：`drawStatus()` 原本写着
+   `"L1+R1 或系统返回键：退出 VR（串流不中断）"`，但 `d09f94f` 已把 `L1+R1` 收紧为
+   **只进入、不退出**（`VrSession.handle(ToggleVrMode)` 里 `if (!_enabled.value) toggle()`）。
+   现改为 `"系统返回键 / 设置「退出 VR」退出 · L1+R1 只进入"`，与 README §3.2 /
+   `VrSettingsSection` / `VrKeys` KDoc 一致。
+2. **状态面板显示倍率**：第一张卡片第二行由
+   `"曲面 %.1f  偏移 %+.1f  填充 %s"` 改为 `"曲面 %.1f  偏移 %+.1f  %s %.2fx"`，
+   直接显示 `VrMenuModel.display(SCREEN_FILL_MODE)` + `s.zoomScale`。不改卡片布局，
+   所以 `panelBitmap` 尺寸 / dirty 重绘链路完全不动。
+3. **放大链路可诊断化**：新增 `logLastZoomSkip: String?` / `logLastZoomActive: Boolean` 与
+   `noteZoomSkip(reason)` / `noteZoomActive(s,w,h)` 两个 edge-triggered 诊断；
+   `onFinishFrame()` 的 `DISTORTED` 分支、`drawZoomFill()` 的 7 个 early return
+   （viewport 无效 / 快照永久降级 / `zoomScale<=1.00` / 菜单打开 / `panel` 未就绪 /
+   快照失败 / …）各记一条一次性 `Log.w`，成功画完记一条 `Log.i` 并清掉 skip 状态。
+   `onRendererShutdown()` 重置这两个字段，GL context 重建后重新探测、重新记一次。
+   健康渲染循环保持日志静默，不会刷屏。
+
+**没有动**：`zoomScale` 默认值 1.35、`ZOOM_MAX=2.50`、三格式快照探测、readPixels 兜底、
+菜单不放大策略、输入路由、设置架构、`VrSettings.DEFAULT`、任何 GL 绘制调用的顺序。
+所有 JVM 单测不受影响（本轮改动都在 Android Canvas / GL 侧，纯 JVM 测不到）。
+
+### 18.3 文档
+
+`README-VR.md` 新增 **§3.6「装了最新 APK 却『依然不能全屏』？按这个顺序查」**，
+六步清单：确认 APK 版本 → 确认 `screenFillMode` 没被 SharedPreferences 记住旧值 →
+确认倍率不在 1.00x → 确认菜单关闭 → `adb logcat -s VrTheaterRenderer:V` 看
+`zoom FILL active` / `zoom FILL skipped: <原因>` / `zoom snapshot: ...` →
+状态面板读模式+倍率。并写入 18.1 的 SDK 调用顺序与整屏 viewport 事实，防止后人再改错方向。
+
+### 18.4 待真机复测
+
+- 装最新 CI 的 debug APK（**不是**上一个 CI 的），2D 设置页确认「画面上下填满」开着、
+  「整体放大」≥ 1.35x，关掉菜单看上下黑边是否被顶掉；
+- `adb logcat -s VrTheaterRenderer:V`：期望看到 `zoom FILL active: ...`，
+  若看到 `zoom FILL skipped: ...` 直接按原因处理；
+- 若 `active` 但仍有黑边，仅调 `zoomScale`（上限 2.50x），**不要改渲染代码**；
+- 状态面板第二行文字是否完整不裁切；退出说明文案是否与真机一致。
+
+### 18.5 交付物
+
+代码提交后重新导出 `OpenNOW-VR-modules-20261108-r3.zip`（r2 会随代码变更过期）。
+包内 `00_先看这个.txt` / `MANIFEST.txt` / `01_模块与设置总表.md` 同步更新提交号与 CI 号。
+

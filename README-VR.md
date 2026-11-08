@@ -103,6 +103,37 @@ VR 内**长按** `START + SELECT` ≥ 500 ms，或**长按** `HOME/MODE` ≥ 500
 其它所有按键**原样透传给串流游戏**（走原有 `NativeStreamInputRouter`）；
 VR 层只保留 `L1+R1`（进入）与 `START+SELECT` / `HOME/MODE`（长按开菜单）的监听。
 
+### 3.6 装了最新 APK 却「依然不能全屏」？按这个顺序查
+
+真机反馈「依然好像是不能全屏的」常见原因不是渲染坏了，而是**放大链路被静默跳过**。
+`d09f94f` 起，每个跳过原因都会打一条一次性日志，照下面查：
+
+1. **先确认装的是最新 CI 产出的 APK**。之前那次反馈本人已说明是「上一个 CI 的编译中、
+   最新的 CI 还没编译完」——`d09f94f` 之前的版本只有 RGBA8 单一快照格式，在 RGB565
+   默认 framebuffer 上会 `GL_INVALID_OPERATION` 并永久降级，画面完全不变。
+2. **确认 2D 设置页的「画面上下填满（单纯放大）」是开着的**。`screenFillMode` 会被
+   `SharedPreferences` 记住；旧版本手动切成「原版（可回退）」后，升级装机仍是
+   `DISTORTED`，`onFinishFrame()` 会整段跳过放大。这是最容易被误判成「改了没用」的一条。
+3. **确认「整体放大」不在 `1.00x`**。默认 `1.35x`，范围 `1.00 ~ 2.50x`，步进 `0.02x`。
+4. **确认 VR 设置菜单是关着的**。菜单面板是铺满屏幕的 quad，放大它会裁掉外圈行和分类
+   chip，所以菜单打开时**故意不放大**；关掉菜单即恢复。
+5. **看 logcat 直接判定**：`adb logcat -s VrTheaterRenderer:V`
+   - 出现 `zoom FILL active: 1.35x on <w>x<h> ...` → 放大已真实运行，黑边还在就只是倍率
+     不够，把「整体放大」继续往上调（QR / 纸盒参数越窄，需要的倍率越大，上限 `2.50x`）。
+   - 出现 `zoom FILL skipped: <原因>` → 原因已经写得很直白（模式 / 倍率 / 菜单 /
+     `panel` 未就绪 / 快照失败 / `all snapshot strategies failed` 永久降级），按它改。
+   - 出现 `zoom snapshot: copy-tex format N accepted` 或 `using glReadPixels fallback` →
+     说明三格式探测 / 兜底已生效，快照确实拿到了最终合成图。
+6. **状态面板也能看**：无串流且菜单关闭时，第一张卡片第二行会显示
+   `曲面 …   偏移 …   <填充模式> <倍率>x`，一眼可确认当前模式和倍率。
+
+技术事实（避免再走回头路）：Cardboard SDK 的 `onDrawFrame()` 顺序是
+`onNewFrame → onRenderStereoFrame（含 renderEyeToDisplay）→ onFinishFrame`，且
+`onFinishFrame` 收到的 viewport 是 `(0, 0, screenParamsWidth, screenParamsHeight)`
+**整屏**而非半屏。所以放大作用的是 SDK 已经完成桶形畸变合成之后的最终画面，
+不是单目、不是去畸变、不是重画左右眼、也不是改 FOV / 投影。上下优先顶满，
+左右允许留小黑边——这正是「单纯放大」的定义。
+
 ---
 
 ## 4. 可调项
