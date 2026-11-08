@@ -146,6 +146,30 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.Consumed, release(r, VrKeys.BUTTON_X))
     }
 
+    /**
+     * Regression: paging with BOTH shoulders held, then closing the panel while they are still
+     * down, must NOT make the next unrelated key look like the L1+R1 VR toggle.
+     */
+    @Test
+    fun shouldersHeldFromMenuPagingCannotToggleVrAfterPanelCloses() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.ChangePage(-1), press(r, VrKeys.BUTTON_L1))
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.BUTTON_R1))
+        r.menuOpen = false // VrSession.setMenuOpen(false), shoulders still physically held
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_A))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.DPAD_UP))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_START))
+        // The stale shoulders' OWN key-repeat is just as dangerous as an unrelated key: a plain
+        // comboPressed() check would see L1+R1 here and exit VR. Only a fresh 0->1 edge may fire.
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_L1))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_R1))
+        // Releasing and pressing the pair again MUST still work (guard is not a permanent lock).
+        release(r, VrKeys.BUTTON_L1)
+        release(r, VrKeys.BUTTON_R1)
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L1))
+        assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_R1))
+    }
+
     /** Holding a shoulder must not fling the user across several category pages. */
     @Test
     fun heldShoulderDoesNotRepeatPageChanges() {

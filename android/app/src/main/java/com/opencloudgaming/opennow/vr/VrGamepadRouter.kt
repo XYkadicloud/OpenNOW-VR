@@ -79,14 +79,25 @@ class VrGamepadRouter {
         }
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
 
+        // L1+R1 toggles VR ONLY on the edge where the combination BECOMES held. This is stricter
+        // than a plain `comboPressed()` check and fixes two real-device bugs:
+        //  1. Shoulders left in `pressed` after using them to PAGE the menu would make the very
+        //     next unrelated key (A, D-pad, ...) look like the VR toggle -> accidental exit.
+        //  2. Even their own OS key-repeat (alreadyDown == true) would re-arm the combo once the
+        //     panel closed, with the same result.
+        // A stale combination can never fire; the user must release and press the pair again.
+        val comboBefore = comboPressed()
         val alreadyDown = !pressed.add(keyCode)
-        // L1+R1 toggles VR. Suppressed while the menu is open, where the same shoulders page it.
-        if (!menuOpen && comboPressed()) {
-            if (!comboFired) {
+        val comboNow = comboPressed()
+        val shoulderDown = keyCode == VrKeys.BUTTON_L1 || keyCode == VrKeys.BUTTON_R1
+        if (!menuOpen && comboNow) {
+            if (!comboBefore && shoulderDown && !comboFired) {
                 comboFired = true
                 return VrCommand.ToggleVrMode
             }
-            return VrCommand.Consumed
+            // Suppressed while the menu is open (shoulders page it), and a held/repeated combo
+            // must never reach the stream game either.
+            if (menuOpen || alreadyDown || comboFired) return VrCommand.Consumed
         }
         // The OS repeats ACTION_DOWN while a key is held. Outside the menu those repeats must stay
         // pass-through so the game keeps its original behaviour. A repeat is also the only clock

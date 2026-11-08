@@ -1037,9 +1037,18 @@ stack，`finish()` 了 Activity。修复：整个 BACK 的 DOWN+UP 序列由 VR 
 | B / SELECT / START / MODE | 关闭菜单 |
 | 左摇杆 | 仅在 A 已武装编辑态时 `Adjust`（←→ 细调 1 步，↑↓ 粗调 5 步） |
 
-`L1+R1` 仍是 VR 开关，但 `VrGamepadRouter.onKey()` 里 `if (!menuOpen && comboPressed())`
-保证菜单开着时这对肩键只负责换页、不会误退出 VR。`REPEATABLE_MENU_KEYS` 仍只含
-`DPAD_UP/DOWN`。
+`L1+R1` 仍是 VR 开关，但 `VrGamepadRouter.onKey()` 只在**组合从「不成立」变成「成立」的那一个
+`ACTION_DOWN` 边沿**上触发：先记 `comboBefore`，再 `pressed.add(keyCode)` 得到 `comboNow`，
+条件为 `!menuOpen && comboNow && !comboBefore && shoulderDown && !comboFired`。
+`REPEATABLE_MENU_KEYS` 仍只含 `DPAD_UP/DOWN`。
+
+> 为什么不能用朴素的 `comboPressed()`：如果用户在菜单里**同时按住 LB+RB** 换页后直接关掉面板，
+> 这两个键仍留在 `pressed` 集合里；此后**任意一个无关键**（A、十字键…）、甚至**这对肩键自身的
+> OS key-repeat**（`alreadyDown == true`）都会看到组合成立，于是 `ToggleVrMode` 把用户踢出 VR。
+> 边沿判定让「陈旧组合」永远不可能再次触发，用户必须松开再按一次；`alreadyDown`/`comboFired`
+> 分支把这些重复事件吞成 `Consumed`。回归用例：
+> `shouldersHeldFromMenuPagingCannotToggleVrAfterPanelCloses`（含「松开后重新按仍能正常退出 VR」）。
+> 本机以 Python 精确复刻该状态机跑过 79 条断言，全绿后再提交。
 
 ### 16.4 新增可调项（全链路）
 
