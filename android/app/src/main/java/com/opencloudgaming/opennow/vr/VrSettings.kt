@@ -65,9 +65,13 @@ object VrRanges {
     const val IPD_SCALE_MAX = 1.6f
     const val IPD_SCALE_STEP = 0.05f
 
-    /** Uniform post-process zoom used by VrScreenFillMode.FILL. 1.00 = original SDK output. */
+    /**
+     * Uniform post-process zoom used by VrScreenFillMode.FILL. 1.00 = original SDK output.
+     * The upper bound was raised from 2.00 to 2.50 after real-device feedback: Cardboard QR
+     * profiles with a narrow distortion mesh need more than 2x to push the top/bottom bands off.
+     */
     const val ZOOM_MIN = 1.00f
-    const val ZOOM_MAX = 2.00f
+    const val ZOOM_MAX = 2.50f
     const val ZOOM_STEP = 0.02f
 
     const val REPEAT_MIN_MS = 60L
@@ -133,12 +137,13 @@ data class VrSettings(
     val screenFillMode: VrScreenFillMode = VrScreenFillMode.FILL,
     /**
      * "单纯放大": uniform zoom applied to the FINISHED stereo frame in onFinishFrame().
-     * 1.00 = no zoom at all (bit-identical to the original SDK output). 1.18 pushes the typical
-     * Cardboard barrel window's top/bottom black bands off the screen while still leaving a small
-     * horizontal margin; raise it if your viewer/QR profile has wider bands. Pure post-process:
-     * no FOV, projection, geometry, shader or SDK C++ change, and both eyes stay fused.
+     * 1.00 = no zoom at all (bit-identical to the original SDK output). 1.35 is the new default:
+     * real-device feedback on the first build ("依然不能全屏") showed 1.18 was not enough even
+     * when the post-process ran. Raise it further if your viewer/QR profile has wider bands.
+     * Pure post-process: no FOV, projection, geometry, shader or SDK C++ change, both eyes stay
+     * fused, and the settings panel is deliberately NOT zoomed so its rows are never cropped.
      */
-    val zoomScale: Float = 1.18f,
+    val zoomScale: Float = 1.35f,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(

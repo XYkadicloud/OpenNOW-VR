@@ -184,7 +184,7 @@ class VrGamepadRouterTest {
 
     @Test
     fun verticalStickAdjustsCoarsely() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
         // Vertical stick deflection uses coarse steps (5). Space the events past menuRepeatMs so
         // the router's rate limiter does not swallow the second one.
         assertEquals(VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS), r.onAxis(0f, 0.9f, 0L))
@@ -193,17 +193,69 @@ class VrGamepadRouterTest {
 
     @Test
     fun horizontalStickAdjustsFinely() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
         // Horizontal stick deflection uses one fine step.
         assertEquals(VrCommand.Adjust(-1), r.onAxis(-0.9f, 0f, 0L))
         assertEquals(VrCommand.Adjust(1), r.onAxis(0.9f, 0f, 1000L))
     }
 
+    /**
+     * Real-device regression: "左摇杆上下滑动是没有办法正常选择选项的切换". The old router always
+     * emitted Adjust, which VrSession dropped while disarmed, so the stick looked completely dead.
+     * Disarmed => NAVIGATE; A-armed => ADJUST. Both modes are pinned here.
+     */
     @Test
-    fun stickAdjustIsConsumedButOnlyChangesValueWhenEditingArmed() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
-        // The router emits Adjust; VrSession drops it unless editing is armed.
-        assertEquals(VrCommand.Adjust(1), r.onAxis(0.9f, 0f, 0L))
+    fun disarmedStickSelectsRowsAndArmedStickAdjustsValues() {
+        val r = VrGamepadRouter()
+        r.menuOpen = true
+        assertEquals(VrCommand.MoveSelection(-1), r.onAxis(0f, -0.9f, 0L))
+        assertEquals(VrCommand.MoveSelection(1), r.onAxis(0f, 0.9f, 1000L))
+        // Horizontal deflection stays inert while disarmed: no paging, no accidental value drift.
+        assertEquals(VrCommand.Consumed, r.onAxis(0.9f, 0f, 2000L))
+
+        r.editing = true
+        r.resetAxisHold()
+        assertEquals(
+            VrCommand.Adjust(-VrGamepadRouter.STICK_COARSE_STEPS),
+            r.onAxis(0f, -0.9f, 3000L),
+        )
+        assertEquals(VrCommand.Adjust(1), r.onAxis(0.9f, 0f, 4000L))
+    }
+
+    /** Bluetooth pads often send the D-pad as AXIS_HAT_Y: one row per press, never auto-scroll. */
+    @Test
+    fun hatAxisSelectsRowsOncePerPressAndNotWhileHeld() {
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
+        assertEquals(VrCommand.MoveSelection(-1), r.onHat(-1f))
+        assertEquals(VrCommand.Consumed, r.onHat(-1f))
+        assertEquals(VrCommand.Consumed, r.onHat(0f))
+        assertEquals(VrCommand.MoveSelection(1), r.onHat(1f))
+        assertEquals(VrCommand.Consumed, r.onHat(1f))
+        assertEquals(VrCommand.MoveSelection(-1), r.onHat(-1f))
+    }
+
+    @Test
+    fun hatAxisIsIgnoredWhenMenuIsClosed() {
+        assertEquals(VrCommand.PassThrough, VrGamepadRouter().onHat(-1f))
+    }
+
+    /** A restarts the stick throttle but must NOT re-arm a physically held HAT direction. */
+    @Test
+    fun resetAxisHoldRestartsStickButKeepsHeldHatEdge() {
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
+        assertEquals(VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS), r.onAxis(0f, 0.9f, 1000L))
+        // Without the reset this event (10ms later) would be swallowed by the repeat throttle.
+        r.resetAxisHold()
+        assertEquals(VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS), r.onAxis(0f, 0.9f, 1010L))
+
+        assertEquals(VrCommand.MoveSelection(-1), r.onHat(-1f))
+        r.resetAxisHold()
+        // Still physically held: resetting must NOT cause a phantom extra row ("press A, selection
+        // jumps"). Zeroing lastHatY here would make the very next motion event fire again.
+        assertEquals(VrCommand.Consumed, r.onHat(-1f))
+        assertEquals(VrCommand.Consumed, r.onHat(0f))
+        // Release + press again is a genuine new edge.
+        assertEquals(VrCommand.MoveSelection(-1), r.onHat(-1f))
     }
 
     @Test
@@ -214,7 +266,7 @@ class VrGamepadRouterTest {
 
     @Test
     fun axisBelowDeadZoneIsConsumedWithoutProducingACommand() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
         assertEquals(VrCommand.Consumed, r.onAxis(0.1f, 0f, 1000L))
     }
 
@@ -226,7 +278,7 @@ class VrGamepadRouterTest {
 
     @Test
     fun verticalAxisCoarselyAdjustsWithRepeatDelay() {
-        val r = VrGamepadRouter().also { it.menuOpen = true; it.repeatMs = 140L }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true; it.repeatMs = 140L }
         val coarse = VrCommand.Adjust(VrGamepadRouter.STICK_COARSE_STEPS)
         assertEquals(coarse, r.onAxis(0f, 0.9f, 1000L))
         assertEquals(VrCommand.Consumed, r.onAxis(0f, 0.9f, 1050L))
@@ -235,13 +287,13 @@ class VrGamepadRouterTest {
 
     @Test
     fun horizontalAxisAdjustsValue() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
         assertEquals(VrCommand.Adjust(-1), r.onAxis(-0.9f, 0f, 0L))
     }
 
     @Test
     fun returningStickToCentreResetsRepeatTimer() {
-        val r = VrGamepadRouter().also { it.menuOpen = true }
+        val r = VrGamepadRouter().also { it.menuOpen = true; it.editing = true }
         r.onAxis(0f, 0.9f, 1000L)
         assertEquals(VrCommand.Consumed, r.onAxis(0f, 0f, 1050L))
         assertEquals(

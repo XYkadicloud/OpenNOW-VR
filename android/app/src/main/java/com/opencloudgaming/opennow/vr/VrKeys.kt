@@ -39,8 +39,21 @@ object VrKeys {
 
     const val AXIS_X = 0
     const val AXIS_Y = 1
+    /**
+     * Many Bluetooth pads report the physical D-pad as HAT AXES inside a MotionEvent instead of
+     * KEYCODE_DPAD_*. With the 2D Compose layer isolated while VR is on, those hat events used to
+     * be swallowed and the D-pad appeared completely dead. AXIS_HAT_Y is now handled by
+     * VrGamepadRouter.onHat(); up = -1, down = +1 (same sign as AXIS_Y).
+     */
+    const val AXIS_HAT_X = 15
+    const val AXIS_HAT_Y = 16
 
-    /** Only L1+R1 toggles VR mode on/off. START+SELECT is reserved for the menu long-press. */
+    /**
+     * L1+R1 is ENTRY-ONLY now (user request): it opens VR when VR is off, but can no longer kick
+     * the user out of an active session. Exiting is deliberately explicit — the phone's system
+     * BACK key, or the "退出 VR" row in the in-VR settings panel. START+SELECT remains reserved
+     * for the menu long-press.
+     */
     val VR_TOGGLE_COMBOS = listOf(
         intArrayOf(BUTTON_L1, BUTTON_R1),
     )

@@ -87,14 +87,25 @@ object VrSession {
     fun setMenuOpen(value: Boolean) {
         _menuOpen.value = value
         router.menuOpen = value
-        if (!value) _editMode.value = false
+        if (!value) setEditMode(false)
     }
 
     /** Switches the second-level page and lands selection on its first row. */
     fun setMenuPage(page: VrMenuPage) {
         _menuPage.value = page
-        _editMode.value = false
+        setEditMode(false)
         _selectedIndex.value = VrMenuModel.firstIndexOf(page)
+    }
+
+    /**
+     * Single source of truth for A-armed editing. Mirrors the flag into the router (which decides
+     * whether the stick NAVIGATES or ADJUSTS) and restarts the stick's repeat cadence, so the new
+     * mode responds immediately instead of waiting out the previous mode's throttle window.
+     */
+    private fun setEditMode(value: Boolean) {
+        _editMode.value = value
+        router.editing = value
+        router.resetAxisHold()
     }
 
     fun changePage(delta: Int) {
@@ -166,13 +177,24 @@ object VrSession {
         if (!_enabled.value || !router.menuOpen) return false
         val x = event.getAxisValue(VrKeys.AXIS_X)
         val y = event.getAxisValue(VrKeys.AXIS_Y)
-        return handle(router.onAxis(x, y, event.eventTime))
+        // A lot of Bluetooth pads send the physical D-pad as AXIS_HAT_Y, not KEYCODE_DPAD_*.
+        // Since MainActivity deliberately stops forwarding generic motion to the 2D Compose UI
+        // while VR is on, those events must be handled HERE or the D-pad looks completely dead.
+        val hat = router.onHat(event.getAxisValue(VrKeys.AXIS_HAT_Y))
+        val command = if (hat is VrCommand.MoveSelection) hat else router.onAxis(x, y, event.eventTime)
+        return handle(command)
     }
 
     private fun handle(command: VrCommand): Boolean = when (command) {
         VrCommand.PassThrough -> false
         VrCommand.Consumed -> true
-        VrCommand.ToggleVrMode -> { toggle(); true }
+        VrCommand.ToggleVrMode -> {
+            // L1+R1 is ENTRY-ONLY (user request). Exiting must be explicit: the phone's system
+            // BACK key, or the "退出 VR" ACTION row in the settings panel. A slipped shoulder
+            // combo can therefore never terminate a running session.
+            if (!_enabled.value) toggle()
+            true
+        }
         VrCommand.ToggleMenu -> { setMenuOpen(!_menuOpen.value); true }
         VrCommand.CloseMenu -> { setMenuOpen(false); true }
         VrCommand.Confirm -> { confirmSelected(); true }
@@ -205,7 +227,7 @@ object VrSession {
             else -> {
                 val result = VrMenuModel.confirm(_settings.value, id, _editMode.value)
                 updateSettings(result.settings)
-                _editMode.value = result.editing
+                setEditMode(result.editing)
             }
         }
     }

@@ -27,17 +27,22 @@ sealed class VrCommand {
  *
  * Design rules (from the user, do not "improve" these):
  *  - No gaze / eye / dwell / head-gesture activation of any kind. Head pose is view-only.
- *  - L1+R1 toggles VR on/off. START+SELECT and HOME/MODE are NOT single-press shortcuts: the
+ *  - L1+R1 is ENTRY-ONLY: it opens VR, never closes it (VrSession enforces this). Exiting is a
+ *    deliberate act via the phone's BACK key or the "退出 VR" menu row. START+SELECT and
+ *    HOME/MODE are NOT single-press shortcuts: the
  *    settings panel opens only after a LONG PRESS (>= VrKeys.MENU_LONG_PRESS_MS) so a stray tap
  *    in game can never open it. Short presses pass straight through to the game unchanged. The
  *    hold timer starts on the initial ACTION_DOWN that completes the combination, NOT on the first
  *    OS key-repeat (see the note in onKey for why).
- *  - When the panel is open, D-pad UP/DOWN only SELECTS a row, LB (L1) / RB (R1) switch the
- *    second-level PAGE, A arms value editing / flips a switch, B closes the panel. D-pad
- *    LEFT/RIGHT are deliberately inert (the user asked that paging NOT live on the D-pad).
+ *  - When the panel is open, D-pad UP/DOWN and the LEFT STICK's vertical axis BOTH select a row;
+ *    LB (L1) / RB (R1) switch the second-level PAGE; A arms value editing / flips a switch;
+ *    B closes the panel. D-pad LEFT/RIGHT and horizontal stick deflection are deliberately inert
+ *    while disarmed (the user asked that paging NOT live on the D-pad).
  *    NUMERIC VALUES are changed ONLY by the left analogue stick AND ONLY while A has armed
- *    editing (that gate is VrMenuModel.adjustIfEditing, enforced in VrSession). This is
- *    deliberate: it makes accidental slider drift impossible.
+ *    editing (VrMenuModel.adjustIfEditing, enforced in VrSession). Before A, the stick MUST still
+ *    do something useful: real-device feedback was "摇杆上下滑动不能切换选项", because the old
+ *    router emitted Adjust unconditionally and VrSession silently dropped it while disarmed.
+ *  - Pads that report their D-pad as AXIS_HAT_Y instead of KEYCODE_DPAD_* are handled by onHat().
  *
  * No Android framework types are used here; VrKeys holds plain Int constants so JVM unit tests run
  * without Robolectric or mocked Android stubs.
@@ -45,6 +50,8 @@ sealed class VrCommand {
 class VrGamepadRouter {
     var vrEnabled: Boolean = false
     var menuOpen: Boolean = false
+    /** Mirrors VrSession.editMode. While true the stick ADJUSTS; while false it NAVIGATES. */
+    var editing: Boolean = false
     var deadZone: Float = VrSettings.DEFAULT.gamepadDeadZone
     var repeatMs: Long = VrSettings.DEFAULT.menuRepeatMs
 
@@ -52,6 +59,8 @@ class VrGamepadRouter {
     private var comboFired = false
     private var lastAxisMs = Long.MIN_VALUE
     private var lastKeyRepeatMs = Long.MIN_VALUE
+    /** Last normalised AXIS_HAT_Y (-1/0/1) so a held hat direction fires only ONCE. */
+    private var lastHatY = 0f
     /** Time when a menu long-press hold began. Long.MIN_VALUE = no hold in progress. */
     private var menuHoldStartMs = Long.MIN_VALUE
     /** Latches once a long-press fired, until the hold is released, so repeats cannot re-toggle. */
@@ -64,6 +73,8 @@ class VrGamepadRouter {
         lastKeyRepeatMs = Long.MIN_VALUE
         menuHoldStartMs = Long.MIN_VALUE
         menuHoldFired = false
+        editing = false
+        lastHatY = 0f
     }
 
     fun onKey(keyCode: Int, action: Int, isGamepad: Boolean, timeMs: Long = 0L): VrCommand {
@@ -150,11 +161,17 @@ class VrGamepadRouter {
     }
 
     /**
-     * Left analogue stick while the menu is open. It ONLY adjusts the numeric value of the
-     * selected row: horizontal = one step, vertical = five steps (coarse). VrSession drops the
-     * command unless A has armed editing, so merely resting a thumb on the stick changes nothing.
-     * Axis events are consumed (never forwarded to the game) so adjusting a slider does not also
-     * move the in-game camera.
+     * Left analogue stick while the menu is open. TWO modes, chosen by [editing]:
+     *
+     *  - **Disarmed (default)**: vertical deflection SELECTS the previous/next row, at the same
+     *    repeat cadence as the D-pad. Horizontal deflection is swallowed. This is the fix for the
+     *    real-device report "左摇杆上下滑动没办法正常切换选项": previously every stick event became
+     *    `Adjust`, which VrSession silently dropped while disarmed, so the stick looked broken.
+     *  - **A-armed**: vertical = five coarse steps, horizontal = one fine step of the selected
+     *    RANGE value. Nothing can drift before the user explicitly presses A.
+     *
+     * Returning to the centre resets the cadence, and every event is consumed so the stick never
+     * also moves the in-game camera while the panel is up.
      */
     fun onAxis(x: Float, y: Float, timeMs: Long): VrCommand {
         if (!menuOpen) return VrCommand.PassThrough
@@ -166,11 +183,47 @@ class VrGamepadRouter {
         }
         if (lastAxisMs != Long.MIN_VALUE && timeMs - lastAxisMs < repeatMs) return VrCommand.Consumed
         lastAxisMs = timeMs
-        return if (ay >= ax) {
+        val vertical = ay >= ax
+        if (!editing) {
+            return if (vertical) VrCommand.MoveSelection(if (y < 0f) -1 else 1) else VrCommand.Consumed
+        }
+        return if (vertical) {
             VrCommand.Adjust(if (y < 0f) -STICK_COARSE_STEPS else STICK_COARSE_STEPS)
         } else {
             VrCommand.Adjust(if (x < 0f) -1 else 1)
         }
+    }
+
+    /**
+     * D-pad reported as AXIS_HAT_Y (common on Bluetooth pads). Edge-triggered: pressing UP/DOWN
+     * fires exactly one MoveSelection, and HOLDING it does not scroll until it is released and
+     * pressed again. Horizontal hat is intentionally ignored — LB/RB own page navigation.
+     */
+    fun onHat(hatY: Float): VrCommand {
+        if (!menuOpen) return VrCommand.PassThrough
+        val direction = when {
+            hatY <= -0.5f -> -1f
+            hatY >= 0.5f -> 1f
+            else -> 0f
+        }
+        val command = if (direction != 0f && direction != lastHatY) {
+            VrCommand.MoveSelection(direction.toInt())
+        } else {
+            VrCommand.Consumed
+        }
+        lastHatY = direction
+        return command
+    }
+
+    /**
+     * Called when A arms/disarms editing or when the page changes, so the stick's repeat cadence
+     * restarts and the new mode responds immediately. HAT state is deliberately NOT cleared:
+     * lastHatY describes a PHYSICALLY HELD direction, and zeroing it would make a still-pressed
+     * D-pad fire one extra MoveSelection on the next motion event ("press A, selection jumps").
+     * Held hat directions therefore keep their edge until the user actually releases them.
+     */
+    fun resetAxisHold() {
+        lastAxisMs = Long.MIN_VALUE
     }
 
     private fun menuKey(keyCode: Int): VrCommand = when (keyCode) {

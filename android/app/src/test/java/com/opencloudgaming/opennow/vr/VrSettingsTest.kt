@@ -20,7 +20,9 @@ class VrSettingsTest {
         assertTrue(s.ipdScale in VrRanges.IPD_SCALE_MIN..VrRanges.IPD_SCALE_MAX)
         assertTrue(s.zoomScale in VrRanges.ZOOM_MIN..VrRanges.ZOOM_MAX)
         assertEquals(1.0f, s.ipdScale, 0f)
-        assertEquals(1.18f, s.zoomScale, 0f)
+        // Raised from 1.18 to 1.35 after real-device feedback that the bands were still visible.
+        assertEquals(1.35f, s.zoomScale, 0f)
+        assertEquals(2.50f, VrRanges.ZOOM_MAX, 0f)
         assertEquals(VrViewerMode.CARDBOARD, s.viewerMode)
     }
 

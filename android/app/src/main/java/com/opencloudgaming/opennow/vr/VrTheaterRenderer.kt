@@ -184,14 +184,24 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private var zoomTextureId = 0
     private var zoomTexWidth = 0
     private var zoomTexHeight = 0
+    private var zoomTexMode = -1
     /**
-     * glCopyTexSubImage2D from a window framebuffer is legal in GLES2 but a few drivers reject
-     * the RGB565->RGBA8 conversion. If it fails we must NOT clear+blit an undefined texture (that
-     * would turn the whole screen black), so we verify once and permanently fall back to the
-     * untouched SDK frame. Reset in onRendererShutdown() so a new GL context is re-verified.
+     * -1 = not probed; 0..ZOOM_COPY_FORMATS.lastIndex = a glCopyTexSubImage2D format this driver
+     * accepted; ZOOM_READPIXELS = every copy format failed, fall back to glReadPixels + upload.
+     *
+     * WHY THIS MATTERS: the first FILL build allocated ONLY an RGBA8 texture. Most devices hand
+     * Cardboard an RGB565 default framebuffer, and GLES2 rejects that copy with
+     * GL_INVALID_OPERATION. The build then "safely" fell back to the untouched SDK frame forever —
+     * which is exactly the real-device report "依然好像是不能全屏". Probing formats (and keeping a
+     * readPixels escape hatch) makes the zoom actually run instead of silently disabling itself.
      */
-    private var zoomCopyVerified = false
+    private var zoomSnapshotMode = -1
+    /** Set only when EVERY snapshot strategy failed; keeps the untouched SDK frame from then on. */
     private var zoomCopyUnsupported = false
+    /** Reused RGBA buffer for the readPixels fallback; reallocated only when the size changes. */
+    private var zoomPixels: ByteBuffer? = null
+    private var zoomPixelsWidth = 0
+    private var zoomPixelsHeight = 0
     /** Static full-screen NDC quad (TRIANGLE_STRIP); filled once in onSurfaceCreated. */
     private val zoomPositionBuffer: FloatBuffer = newFloatBuffer(12)
     private val zoomTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
@@ -492,36 +502,17 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val w = if (viewport.width > 0) viewport.width else surfaceWidth
         val h = if (viewport.height > 0) viewport.height else surfaceHeight
         if (w <= 0 || h <= 0) return
+        if (zoomCopyUnsupported) return
         val zoom = s.zoomScale
         if (zoom <= 1.001f) return
-        if (zoomCopyUnsupported) return
+        // The settings panel is a screen-covering quad. Zooming it would crop its outer rows and
+        // chips, so the composite is enlarged ONLY while streaming / on the status screen.
+        if (VrSession.menuOpen.value) return
         val prog = panel ?: return
-        if (!ensureZoomTexture(w, h)) return
 
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
-        // Deliberately do NOT touch GL_BLEND: the finished frame is still on screen at this point,
-        // and leaving the SDK's own state alone means a failed copy can fall back with zero damage.
-
-        // 1. Snapshot the finished frame. glCopyTexSubImage2D reads the currently bound READ
-        //    framebuffer (default = 0), origin bottom-left — the same origin the texture uses.
-        if (!zoomCopyVerified) {
-            // Drain stale errors from the SDK's distortion pass so we only judge OUR copy.
-            var drained = 0
-            while (drained < 8 && GLES20.glGetError() != GLES20.GL_NO_ERROR) drained++
-        }
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
-        GLES20.glCopyTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
-        if (!zoomCopyVerified) {
-            if (GLES20.glGetError() != GLES20.GL_NO_ERROR) {
-                zoomCopyUnsupported = true
-                Log.w(TAG, "zoom FILL disabled: glCopyTexSubImage2D failed; keeping original SDK frame")
-                return
-            }
-            zoomCopyVerified = true
-        }
+        // 1. Snapshot the finished frame. IMPORTANT: nothing is cleared until a snapshot actually
+        //    succeeds, so a driver that refuses every strategy leaves the SDK frame 100% intact.
+        if (!snapshotZoomFrame(w, h)) return
 
         // 2. Black behind the enlarged picture (only visible if zoom is small / aspect differs).
         GLES20.glViewport(0, 0, w, h)
@@ -539,6 +530,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         GLES20.glUniform1f(prog.brightness, 1f)
         GLES20.glUniform1f(prog.flip, 0f)
         GLES20.glUniform1i(prog.texture, 0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
 
         zoomPositionBuffer.position(0)
         GLES20.glEnableVertexAttribArray(prog.position)
@@ -555,8 +548,85 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         GLES20.glViewport(0, 0, w, h)
     }
 
-    /** Allocates / resizes the RGBA snapshot texture. GL thread only, zero per-frame allocation. */
-    private fun ensureZoomTexture(w: Int, h: Int): Boolean {
+    /**
+     * Copies the finished default framebuffer into [zoomTextureId], probing texture formats on the
+     * first frame. Returns false WITHOUT touching the screen when no strategy works.
+     */
+    private fun snapshotZoomFrame(w: Int, h: Int): Boolean {
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        drainGlErrors() // SDK distortion pass may have left unrelated errors behind.
+
+        // A surface size change (rotation / window resize) must reallocate the snapshot texture
+        // even AFTER the format probe succeeded, otherwise the copy keeps targeting stale
+        // dimensions and the enlarged picture is stretched or blank. allocateZoomTexture() is a
+        // no-op while w/h/mode are unchanged, so this stays off the per-frame hot path.
+        if (zoomSnapshotMode == ZOOM_READPIXELS) {
+            if (!allocateZoomTexture(w, h, ZOOM_READPIXELS)) return false
+            return snapshotViaReadPixels(w, h)
+        }
+        if (zoomSnapshotMode >= 0) {
+            if (!allocateZoomTexture(w, h, zoomSnapshotMode)) return false
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
+            // Already proven on this GL context; no per-frame glGetError() hot path.
+            GLES20.glCopyTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+            return true
+        }
+
+        // First frame: the destination format must match the window framebuffer. RGBA8 alone is
+        // rejected by RGB565 devices, so try RGB565 / RGB8 as well before giving up.
+        for (mode in ZOOM_COPY_FORMATS.indices) {
+            if (!allocateZoomTexture(w, h, mode)) return false
+            drainGlErrors() // ignore errors from glTexImage2D itself, judge only the copy
+            GLES20.glCopyTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+            if (GLES20.glGetError() == GLES20.GL_NO_ERROR) {
+                zoomSnapshotMode = mode
+                Log.d(TAG, "zoom snapshot: copy-tex format $mode accepted (${w}x${h})")
+                return true
+            }
+        }
+
+        // Escape hatch: glReadPixels does the framebuffer->RGBA conversion in the driver and is
+        // far more widely supported. It costs one full-screen readback per frame, so it is used
+        // ONLY when copy-tex is entirely unavailable — still better than no zoom at all.
+        if (!allocateZoomTexture(w, h, ZOOM_READPIXELS)) return false
+        drainGlErrors()
+        if (snapshotViaReadPixels(w, h)) {
+            zoomSnapshotMode = ZOOM_READPIXELS
+            Log.w(TAG, "zoom snapshot: copy-tex rejected everywhere; using glReadPixels fallback")
+            return true
+        }
+        zoomCopyUnsupported = true
+        Log.w(TAG, "zoom FILL disabled: no snapshot strategy works; keeping original SDK frame")
+        return false
+    }
+
+    /** Last-resort snapshot: read the window framebuffer as RGBA8 and upload it into the texture. */
+    private fun snapshotViaReadPixels(w: Int, h: Int): Boolean {
+        val bytes = w.toLong() * h.toLong() * 4L
+        if (bytes <= 0L || bytes > MAX_SNAPSHOT_BYTES) return false
+        if (zoomPixels == null || zoomPixelsWidth != w || zoomPixelsHeight != h) {
+            zoomPixels = ByteBuffer.allocateDirect(bytes.toInt()).order(ByteOrder.nativeOrder())
+            zoomPixelsWidth = w
+            zoomPixelsHeight = h
+        }
+        val buf = zoomPixels ?: return false
+        buf.clear()
+        GLES20.glReadPixels(0, 0, w, h, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+        if (GLES20.glGetError() != GLES20.GL_NO_ERROR) return false
+        buf.position(0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
+        GLES20.glTexSubImage2D(
+            GLES20.GL_TEXTURE_2D, 0, 0, 0, w, h,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf,
+        )
+        return GLES20.glGetError() == GLES20.GL_NO_ERROR
+    }
+
+    /** Allocates / resizes the snapshot texture for [mode]. GL thread only, no per-frame alloc. */
+    private fun allocateZoomTexture(w: Int, h: Int, mode: Int): Boolean {
         if (zoomTextureId == 0) {
             val ids = IntArray(1)
             GLES20.glGenTextures(1, ids, 0)
@@ -570,16 +640,22 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         } else {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
         }
-        if (zoomTexWidth != w || zoomTexHeight != h) {
+        if (zoomTexWidth != w || zoomTexHeight != h || zoomTexMode != mode) {
+            val fmt = ZOOM_COPY_FORMATS[if (mode == ZOOM_READPIXELS) 0 else mode]
             // NPOT textures are valid in GLES2 with CLAMP_TO_EDGE and no mipmaps.
             GLES20.glTexImage2D(
-                GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
-                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null,
+                GLES20.GL_TEXTURE_2D, 0, fmt[0], w, h, 0, fmt[1], fmt[2], null,
             )
             zoomTexWidth = w
             zoomTexHeight = h
+            zoomTexMode = mode
         }
         return true
+    }
+
+    private fun drainGlErrors() {
+        var drained = 0
+        while (drained < 8 && GLES20.glGetError() != GLES20.GL_NO_ERROR) drained++
     }
 
     /**
@@ -634,9 +710,13 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         }
         zoomTexWidth = 0
         zoomTexHeight = 0
-        // A new GL context may support the copy even if the previous one did not.
-        zoomCopyVerified = false
+        zoomTexMode = -1
+        // A new GL context gets a fresh format probe; the old driver verdict no longer applies.
+        zoomSnapshotMode = -1
         zoomCopyUnsupported = false
+        zoomPixels = null
+        zoomPixelsWidth = 0
+        zoomPixelsHeight = 0
         if (panelTextureId != 0) {
             GLES20.glDeleteTextures(1, intArrayOf(panelTextureId), 0)
             panelTextureId = 0
@@ -946,7 +1026,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val banner = if (editing) {
             "编辑中 · 左摇杆 ←→ 细调 / ↑↓ 快调 · A 完成 · B 返回"
         } else {
-            page.subtitle + "   ·   ↑↓ 选择   LB/RB 换页   A 编辑 / 开关"
+            page.subtitle + "   ·   ↑↓/摇杆上下 选择   LB/RB 换页   A 编辑 / 开关"
         }
         canvas.drawText(banner, 36f, 135f, hint)
 
@@ -1342,6 +1422,21 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     }
 
     private companion object {
+        /**
+         * Destination texture formats tried against the window framebuffer, in order:
+         * {internalFormat, format, type}. RGBA8 is first (fast path on RGBA8 displays), but an
+         * RGB565 default framebuffer rejects it, hence the RGB565 and RGB8 alternatives.
+         */
+        val ZOOM_COPY_FORMATS = arrayOf(
+            intArrayOf(GLES20.GL_RGBA, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE),
+            intArrayOf(GLES20.GL_RGB, GLES20.GL_RGB, GLES20.GL_UNSIGNED_SHORT_5_6_5),
+            intArrayOf(GLES20.GL_RGB, GLES20.GL_RGB, GLES20.GL_UNSIGNED_BYTE),
+        )
+        /** Sentinel for zoomSnapshotMode: use glReadPixels + glTexSubImage2D every frame. */
+        const val ZOOM_READPIXELS = -2
+        /** Refuse a readback that would allocate an unreasonable amount of native memory. */
+        const val MAX_SNAPSHOT_BYTES = 32L * 1024L * 1024L
+
         const val TAG = "VrTheaterRenderer"
         /** One heartbeat line per this many onDrawEye calls (both eyes share one counter). */
         const val LOG_INTERVAL_FRAMES = 120

@@ -174,7 +174,9 @@ class VrMenuModelTest {
     fun zoomScaleRowStaysWithinItsDeclaredBounds() {
         val s = VrSettings.DEFAULT
         assertEquals(VrRanges.ZOOM_MIN, 1.00f, 1e-4f)
-        assertEquals(1.18f, s.zoomScale, 1e-4f)
+        // 1.35 after real-device feedback ("依然不能全屏"); 1.18 was not enough to clear the bands.
+        assertEquals(1.35f, s.zoomScale, 1e-4f)
+        assertEquals(2.50f, VrRanges.ZOOM_MAX, 1e-4f)
         assertTrue(VrMenuModel.display(s, VrMenuItemId.ZOOM_SCALE).isNotBlank())
         assertEquals(
             VrRanges.ZOOM_MAX,

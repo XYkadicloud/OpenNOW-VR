@@ -1081,5 +1081,120 @@ stack，`finish()` 了 Activity。修复：整个 BACK 的 DOWN+UP 序列由 VR 
 - `zoomScale` 从 1.00 往上调，上下黑边是否按预期减少；双眼是否仍能重叠；
 - 放大后 VR 设置菜单四边是否被裁（1.18x 理论上留有余量，但要用真机确认）；
 - 若设备驱动不支持 `glCopyTexSubImage2D`，应自动降级为原版画面而非黑屏；
-- 菜单关闭时 `L1+R1` 仍能正常退出 VR。
+- 菜单关闭时 `L1+R1` 仍能正常退出 VR。（⚠️ 此条已随 §17 改为 **entry-only**，作废。）
+
+---
+
+## 17. 2026-11-08 真机第四轮反馈：摇杆选行 / 退出方式 / 全屏仍未生效 / 并行代码
+
+### 17.1 并行工作区冲突与处置（重要）
+
+用户误让另一个 AI 同时改了同一个本地目录（Shizuku 虚拟显示器：在 VR 里跑 Chrome / YouTube 等
+2D App）。对方声称「原项目完全不动」，实际工作区里 `build.gradle.kts`、`VrMenuModel.kt`、
+`VrModeHost.kt`、`VrSession.kt`、`VrTheaterRenderer.kt` 被改，另有 `vr/shizuku/` 6 个新文件。
+
+审计结论：
+- **我的工作没被破坏**：`b109061` 的 `onFinishFrame()` / `drawZoomFill()` 未被触碰；
+  `VrMenuModel` 的并行改动是在 23 行版本上增量加第 6 页，没回退 `ZOOM_SCALE` / `SCREEN_FILL_MODE`。
+  对方列出的 `VrGamepadRouter.kt` / `VrGamepadRouterTest.kt` / `README-VR.md` / `HANDOFF.md`
+  实际只有我的改动。
+- **该批代码合并前编译必红**：① `drawEyeScene()` 把嵌套 `Pair` 做 4 元解构、`handles.program` 失效；
+  ② `rememberUpdated()` 返回 `State<T>` 却赋给 `VrVirtualDisplayHost?` 并调 `.start()`；
+  ③ `VrSession.showVirtualDisplayStatus()` 读 `private host.args`；④ `VrMenuModelTest` 断言 23 行而实际 27；
+  ⑤ 4 处 trailing whitespace。另有功能隐患（虚拟显示器复用视频 `stMatrix`、异步 `start()` 晚于 GL 创建）。
+- 处置：先精确 `git add` 提交我自己的文件，再把整批并行改动提交到本地分支
+  `wip/shizuku-virtual-display-20261108`（commit message 明确标注 NOT COMPILING / DO NOT PUSH），
+  切回 `main` 得到干净工作区；用户随后确认「没有用到，可以删掉先」，于是 `git branch -D` 删除该分支。
+  **仓库里已完全没有这批代码**；工作区上级的 `VR-Shizuku-VirtualDisplay-Extracted/` 提取包仍在，
+  作为独立副本保留（不在 git 内）。
+- 教训：不要用对方建议的 `git stash push` 来合并 —— 当时暂存区还有我本轮 4 个文件，会一起被卷走。
+  正确做法是精确路径 `git add`，或开独立分支隔离。
+
+### 17.2 「左摇杆上下滑动不能切换选项」根因
+
+`VrGamepadRouter.onAxis()` 无论是否处于 A 门控编辑态都只发 `VrCommand.Adjust`；
+`VrSession.handle()` 再用 `VrMenuModel.adjustIfEditing()` 把未编辑态的 Adjust **整条丢掉**。
+于是没按 `A` 时摇杆上下推完全无响应 —— 真机表现就是「滑不动、设置依然有问题」。
+
+修复：`VrGamepadRouter` 新增 `editing` 标志（由 `VrSession.setEditMode()` 单点同步），
+`onAxis()` 双模式：
+- **未编辑态**：垂直主导 → `MoveSelection(±1)`（与十字键同节奏连选）；水平主导 → `Consumed`。
+- **A 编辑态**：垂直 → `Adjust(±5)` 粗调，水平 → `Adjust(±1)` 细调（原行为不变）。
+
+`setEditMode()` 同时调 `router.resetAxisHold()` 重置 `lastAxisMs`（摇杆重复节奏），
+让新模式立刻响应，不必等上一个模式的节流窗口过期。`reset()` 清 `editing` / `lastHatY`。
+注意 `resetAxisHold()` **故意不清 `lastHatY`**：它记录的是十字键物理按下的边沿状态，
+清零会让「按 A 时仍按着的十字键」在下一个 motion event 再发一次 `MoveSelection`（选中行跳一格）。
+保留它才能做到「按住不连发、松开再按才走下一行」。
+
+**HAT 轴兼容**：不少蓝牙手柄把十字键报成 `AXIS_HAT_Y`（MotionEvent）而非 `KEYCODE_DPAD_*`。
+而 `b109061` 的输入隔离在 VR 开启时跳过了 `dispatchGamepadHatNavigation()`，这些事件会被直接吞掉。
+现新增 `VrKeys.AXIS_HAT_X/Y`、`VrGamepadRouter.onHat(hatY)`（边沿触发，按一次走一行、按住不连发），
+`VrSession.onMotionEvent()` 优先消费 HAT 的 `MoveSelection`，否则走 `onAxis()`。
+
+### 17.3 退出 VR 方式（按用户偏好收紧）
+
+用户问「只能使用返回吗？改成只能返回来退出也可以，但设置在设置里退出更好」。
+现状其实有三条（`L1+R1` / 系统返回键 / 菜单「退出 VR」行），但 `L1+R1` 会误退出。
+现改为 **`VrSession.handle()` 里 `ToggleVrMode` 仅在 `_enabled == false` 时执行**：
+- `L1+R1` → **只进入**，在 VR 里按不动作（命令被吞，不会落到游戏）。
+- 退出只剩两条显式路径：① 手机系统返回键（菜单开 → 关菜单；菜单关 → 退出 VR）；
+  ② VR 设置菜单「快捷 → 退出 VR」按 `A`。
+- `README-VR.md §3` 与 2D 设置页文案同步改写。`VrKeys.VR_TOGGLE_COMBOS` 注释改为 ENTRY-ONLY。
+
+### 17.4 「依然不能全屏」根因与修复（本轮最关键）
+
+上一版 `b109061` 的 FILL 在真机上表现为**完全没变化**，不是放大倍数不够，而是根本没跑：
+`ensureZoomTexture()` 只分配 **RGBA8** 纹理，但多数手机给 Cardboard 的默认 framebuffer 是 **RGB565**；
+GLES2 的 `glCopyTexSubImage2D` 对格式不兼容的窗口缓冲拷贝返回 `GL_INVALID_OPERATION`。
+旧代码的「安全兜底」是校验失败就 `zoomCopyUnsupported = true` **永久降级回 SDK 原版**，
+且首帧校验前的 drain 只做一次，任何 SDK 残留错误也会误判 → 放大永远不执行。
+
+修复（`VrTheaterRenderer`）：
+1. 首帧 drain 旧 GL error 后，用 `ZOOM_COPY_FORMATS`（**RGBA8 → RGB565 → RGB8**）依次重新
+   `glTexImage2D` 分配并试拷，驱动接受哪个就固定哪个；之后每帧零 `glGetError()` 开销。
+2. 三种全失败 → `glReadPixels`(RGBA8) + `glTexSubImage2D` 上传兜底，带 32 MB 上限保护；
+   该路径有全屏读回开销，但只在 copy-tex 完全不可用时启用。
+3. 只有连读回都失败才置 `zoomCopyUnsupported`。**所有失败路径都在 `glClear()` 之前 return**，
+   原 SDK 画面完好，绝不黑屏。`onRendererShutdown()` 重置全部探测状态，GL context 重建时重来。
+4. `menuOpen` 时直接跳过放大（`VrSession.menuOpen.value`），设置面板永远不被裁切。
+5. `VrRanges.ZOOM_MAX` 2.00 → **2.50**，`VrSettings.DEFAULT.zoomScale` 1.18 → **1.35**。
+6. 尺寸变化保护：`zoomSnapshotMode` 已确定（含 `ZOOM_READPIXELS`）的分支也先调
+   `allocateZoomTexture(w, h, mode)`。之前只有首帧探测循环分配纹理，横竖屏切换 / surface 尺寸
+   变化后仍往旧尺寸纹理里 `glCopyTexSubImage2D`，会导致画面被拉伸或空白。`allocateZoomTexture()`
+   在 `w/h/mode` 未变时是 no-op，不进入每帧热路径。
+
+### 17.5 可调项与文档
+
+- 本轮没有新增设置项；`zoomScale` 默认值与上限调整会自动贯穿 `VrSettings` /
+  `VrSettingsStore` / `VrSettingSpecs.ALL` / `VrMenuModel.ZOOM_SCALE` / 恢复默认。
+- `README-VR.md §3` 整节重写为完整操作手册（进入 / 退出 / 开菜单 / 菜单内 / 菜单外 5 小节）。
+- `VrSettingsSection` 两处文案更新（退出方式、放大范围与「菜单不放大」）。
+- 菜单 banner 改为 `↑↓/摇杆上下 选择   LB/RB 换页   A 编辑 / 开关`。
+- `README-VR.md §3` 重写为完整操作手册后，§4 的「进入 / 退出 VR」旧文案也一并订正为
+  「进入」+ 两条显式退出路径，避免手册自相矛盾。
+
+### 17.6 测试更新
+
+`VrGamepadRouterTest`：原先所有 `onAxis()` 用例显式设 `editing = true`（继续覆盖调值行为）；
+新增 `disarmedStickSelectsRowsAndArmedStickAdjustsValues`、
+`hatAxisSelectsRowsOncePerPressAndNotWhileHeld`、`hatAxisIsIgnoredWhenMenuIsClosed`、
+`resetAxisHoldRestartsStickButKeepsHeldHatEdge`（后者钉住「按 A 不会让仍按着的十字键多走一行」）。
+`VrKeys` 新增 `AXIS_HAT_X/Y` 纯 Int 常量，不引入 Android 依赖。
+
+**默认值改动连带修的两处必红断言**：`VrMenuModelTest.zoomScaleRowStaysWithinItsDeclaredBounds`
+与 `VrSettingsTest.defaultsAreInsideEveryDeclaredRange` 仍写死 `assertEquals(1.18f, s.zoomScale)`，
+本轮把默认值改成 1.35 后这两条会直接失败；已同步改为 `1.35f`，并各加一条
+`assertEquals(2.50f, VrRanges.ZOOM_MAX)` 钉住新上限。
+
+### 17.7 待真机复测
+
+- 左摇杆上下（未按 A）能否顺畅选行、按住连选节奏是否合适；十字键若为 HAT 轴能否选行；
+- 按 `A` 后摇杆是否只改数值、`B` 返回后是否立刻恢复选行；
+- 退出：`L1+R1` 在 VR 内不再退出、手机返回键与菜单「退出 VR」两条是否都可用；
+- **全屏**：`zoomScale = 1.35` 时上下黑边是否真的被顶掉；若仍有，继续往上调到 2.00~2.50；
+  设置菜单打开时画面是否不裁切；驱动不走 readPixels 兜底时是否流畅。
+- 若仍完全无变化，请确认 2D 设置页「画面上下填满（单纯放大）」开关是开着的，
+  且「整体放大」滑块不在 `1.00x`（`screenFillMode` 会被 SharedPreferences 记住，
+  旧版本手动关过的话升级后仍是 `DISTORTED`）。
 
