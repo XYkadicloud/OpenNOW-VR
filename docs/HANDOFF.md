@@ -835,3 +835,122 @@ StateFlow → `VrModeHost` → `VrTheaterView.applySettings` → renderer），`
 文档（`README-VR.md` / `docs/HANDOFF.md`）随后以纯文档 `[skip ci]` 提交单独推送。
 
 **待真机复测**：调小 / 调大是否让左右眼画面靠拢 / 分离且能正常融合，1.00x 是否与原版一致。
+
+---
+
+## 15. 2026-11-08 第四轮：上下填满（双目）、二级菜单、A 门控编辑、入口重排（commit `6cac3e3`）
+
+### 15.1 先纠正一次理解偏差（重要，别再犯）
+
+用户说「依然是不能够全屏铺满」，并贴截图说明「整个 VR 窗口要能上下填满，而不是有大的黑边」。
+**一开始被误解成**：加 `FULLSCREEN` / `SQUARE` 模式、加 `fillScale` 数值项、加菜单主题，甚至考虑
+`setStereoRenderMode(false)` 退化成单目无畸变 NDC quad。用户明确纠正：
+
+> 「单目模式，不就是 VR 直接显示嘛」——即**不能用退化成单目当作 VR 全屏方案**；
+> 「全屏填充」= 上下方向铺满物理屏幕、消掉黑边，**不是**把画面做成方形、也不是 2D 直显。
+
+随后回退了半成品（tag / branch / stash 见 15.6），重新读 vendored SDK 源码定根因。
+
+### 15.2 根因：黑边来自 distortion mesh，不是 Activity window flag
+
+- `third_party/cardboard/sdk/lens_distortion.cc:189-194`：`CalculateFov()` 用
+  `std::min(几何角, device_fov[...])` 把 FOV **截断到设备参数**。
+- `distortion_mesh.cc:53-59`：网格顶点由 tan-angle 转 NDC（`2*u_screen-1`），FOV 偏小 →
+  畸变网格只覆盖屏幕中间一块 → 上下被裁、边缘出现圆角/暗角/中缝。
+- `CardboardView.onRenderStereoFrame()`：左右眼先分别画进共享 FBO 的
+  `(0,0,w/2,h)` 与 `(w/2,0,w/2,h)` viewport（**内容本来就是全高**），
+  再调 `renderEyeToDisplay()` 做畸变合成 —— **黑边是这一层加上的**。
+- 结论：`FLAG_LAYOUT_NO_LIMITS` / 隐藏 systemGestures / cutout 只解决系统栏与刘海，
+  **消不掉畸变 mesh 的黑边**。继续堆 window flags 是死路。
+
+### 15.3 方案：保留双目，覆盖畸变合成（不碰 SDK / shader）
+
+`VrScreenFillMode { DISTORTED, FILL }`，默认 `FILL`。
+
+1. `onNewFrame()` 每帧把 `frameMvpCount = 0`。
+2. `onDrawEye()` 组装完每眼最终 MVP（`eyeFromHead × head`，再 `perspective`，
+   最后 `applyIpdShiftInto`）后 `System.arraycopy` 缓存进 `frameMvps[0/1]`；
+   同时快照 `frameUseVideo` / `frameDrawPanel`。原 `onDrawEye` 的绘制体抽成
+   `drawEyeScene(mvp, s, useVideo, drawPanel, allowBackgroundLoad)`。
+3. `onFinishFrame(viewport)`（SDK 完成 FBO + 畸变合成之后、默认 framebuffer 上）：
+   `drawVerticalFill()` → `glBindFramebuffer(0)`、`glClear` 掉畸变结果、
+   `glDisable(DEPTH/SCISSOR/BLEND)`，然后设 `(0,0,w/2,h)` 画左眼缓存 MVP、
+   `(w/2,0,w/2,h)` 画右眼缓存 MVP。单目（`frameMvpCount==1`）时整屏画一次。
+4. 矩形 viewport 尺寸与 SDK 的 FBO viewport **完全一致**，MVP 一致 → 画面内容 / 比例 /
+   双目视差都不变，只是不再经过畸变 mesh。上下 100% 顶满、无圆角暗角/中缝，
+   横屏手机上每眼接近方形。固定中心辅助线在这之后画，物理屏幕层级不变。
+5. **两眼用的是不同 MVP，仍是真双目立体**；不是 `setStereoRenderMode(false)`、
+   不是单目 2D 直显。不改 GLSL、不改 vendor C++、不动零拷贝 OES 视频通路。
+6. `DISTORTED` 完全不进 `drawVerticalFill()`，逐像素回到旧渲染 —— 运行时一键回退。
+
+**代价（已写进 README）**：SDK 的预畸变本来用于抵消纸盒凸透镜的桶形畸变，关掉后戴纸盒看
+边缘直线会略外凸 / 边角轻微拉伸；中心清晰、双眼视差与深度完整。裸眼看手机 / 简易支架
+无影响且更满。这是做成开关而不是硬改的原因。
+
+### 15.4 菜单：二级页面 + A 门控 + 左摇杆独占数值
+
+用户要求「VR 内的设置界面改成有二级页面的那种」「调整具体数值要按 A 才能调整」
+「方向键只用于选择条目」「左摇杆调整具体数值」「开关类按 A」「现代化美观一点」。
+
+- `VrMenuModel`：`VrMenuPage` + `pages`（画面 / 观看 / 操作 / 环境 / 快捷 5 页）、
+  扁平 `items` 22 行 + `pageRanges = 0..8, 9..13, 14..16, 17..18, 19..21`，
+  `init{}` 里 `require` 校验连续且恰好覆盖，改坏立刻崩在类初始化。
+  新增 `itemsFor / firstIndexOf / lastIndexOf / clampToPage / pageIndex`。
+  新增纯函数 `confirm(settings, id, editing): VrConfirmResult` 与
+  `adjustIfEditing(settings, id, steps, editing)` 作为**A 门控的唯一入口**，便于 JVM 单测锁契约。
+  新增 `SCREEN_FILL_MODE` ENUM 行（`FILL` ↔ `DISTORTED`）。
+- `VrSession`：新增 `menuPage` / `editMode` 两个 `StateFlow`；`setMenuOpen(false)`、
+  `setMenuPage()` 都会清编辑态；`setSelectedIndex()` 用 `clampToPage()` 保证十字键不会跨页；
+  `VrCommand.Adjust` 只在编辑态写 SharedPreferences（未编辑时直接跳过磁盘写，避免摇杆每帧刷盘）。
+- `VrGamepadRouter`：新增 `ChangePage(delta)`；D-pad ←→ 只换页且**移出 key-repeat 列表**
+  （否则按住会从第一页一路跳到最后一页）；左摇杆水平 1 步 / 垂直 5 步
+  （`STICK_COARSE_STEPS = 5`，companion 改 public 供测试引用）；肩键 ×5 加速移除。
+- `VrTheaterRenderer.drawMenu()` / `drawStatus()` 重写为现代化 UI：渐变背景、圆角卡片 +
+  描边、分类 chip、选中高亮竖条、编辑中 banner、数值进度条、开关胶囊、
+  页计数 `01 / 05`。`MENU_COLORS` 统一配色，paint 在 `createPanelResources()` 分配、
+  `onRendererShutdown()` 释放。
+
+### 15.5 入口：删掉误触的常驻按钮
+
+用户：「去掉进入 VR 的全局按钮……放在右屏幕右下角始终，有点容易按到误触」，
+要求外部主页面用单独原生按钮、游戏内串流菜单可点按进入 VR、手柄 `L1+R1` 保留。
+
+- `VrModeHost.kt`：删除 `Alignment.BottomEnd` 常驻「进入 VR」按钮及全部相关 imports，
+  VR 开启后画面上**零浮层控件**。
+- `OpenNowScreens.kt`：`TopStatusBar` 新增 `onEnterVr: () -> Unit = {}`，
+  顶栏加 `ElevatedButton("进入 VR")`；外部主页面调用处传 `VrSession.setEnabled(true)`。
+- `OpenNowStreamControls.kt`：`StreamControlsPanel` 新增 `onEnterVr` 参数，
+  Quick Menu 加 `ControlActionRow(label = "进入 VR")`；`OpenNowStreamSurface.kt` 传入的
+  回调**先 `controlsOpen = false` 收起菜单**再进 VR，避免退出 VR 后菜单还开着。
+- `VrSettingsSection.kt` 的 VR 模式开关、VR 菜单「退出 VR」行均保留。
+
+### 15.6 可调项 / 回退 / 验证
+
+- `screenFillMode` 全链路：`VrSettings`（含 `sanitized()` 保留 + `DEFAULT`）、
+  `VrSettingsStore`（`K_FILL_MODE = "screenFillMode"`，`valueOf` 带 `runCatching` 兜底）、
+  `VrSettingsSection` 2D 开关、`VrMenuModel` VR ENUM 行、恢复默认。
+- 防改错回滚点：`snapshot-20261108-pre-refactor` tag、
+  `backup/pre-fullscreen-refactor-20261108` branch、`git stash` 双副本。
+- 测试更新：`VrMenuModelTest`（22 行 / 页结构 / clamp / 门控 / confirm / fill 切换）、
+  `VrGamepadRouterTest`（ChangePage / 摇杆粗细调 / STICK_COARSE_STEPS）、
+  `VrSettingsTest`（fill 默认与 sanitize 保留）、
+  `OnScreenControlsSettingsInstrumentedTest`（补 `onEnterVr = { }`）。
+- **CI run `42438601098`（`6cac3e3`）：两 job 全绿** —— AAR 构建 + JNI 守卫、
+  JVM 单测 + debug APK、测试数量断言、APK 收集与两处 JNI 守卫全部 success。
+- 本地无 Android 工具链，所有编译验证只能走 GitHub Actions；纯文档提交带 `[skip ci]`。
+
+### 15.7 待真机复测（CI 抓不到）
+
+`FILL` 是否真的上下顶满、黑边/圆角是否消失；纸盒镜片下边缘外凸是否可接受；
+切 `DISTORTED` 是否回到旧渲染；二级菜单 5 页排版是否完整不裁切；
+`A` 门控 + 左摇杆粗细调手感；十字键 ←→ 换页；三个新入口是否都能进 VR 且无误触；
+以及 §14 遗留的朝向 / 辅助线 / 瞳距 / 长按等项目。
+
+### 15.8 已知技术债
+
+- `VrHeadPose.viewRotationInto` 四参重载每帧 `FloatArray(4)` 临时分配，与「渲染循环零堆分配」目标冲突。
+- `centerOffsetQuaternion` 主线程写 / GL 线程读，无显式同步。
+- 长按菜单依赖手柄对 `START/SELECT/MODE` 发 OS key-repeat；若某手柄不发则不会触发。
+- `FILL` 绕开畸变，真实纸盒边缘可能变形；「保留畸变且铺满」需改 vendored
+  `CalculateFov()` 并重编 AAR，风险高，暂不做。
+

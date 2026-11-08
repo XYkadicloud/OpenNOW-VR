@@ -36,11 +36,12 @@
 | **P1 视频纹理接入**（`GL_TEXTURE_EXTERNAL_OES` + SurfaceTexture → 平面幕布） | **已实现**（零拷贝），**真机未验证** |
 | 纯黑背景 + 无串流时的 2D 状态面板（不再是空白屏） | 已实现，**真机未验证** |
 | 低端机性能优化（渲染循环零堆分配、顶点 50→4、面板节流、官方单目省电档） | 已实现，详见 `HANDOFF.md` 第 9 节 |
-| **P3 手柄驱动的可见 VR 设置面板** | **已实现**：**长按** `START+SELECT` 或**长按** `HOME/MODE` 打开双列菜单（现 21 行），`↑↓` 选择、`←→` 调整、`A` 确认；含瞳距/背景/镜像/翻转/辅助线/重置中心点等全部可调项 |
+| **P3 手柄驱动的可见 VR 设置面板** | **已实现（2026-11-08 重做）**：**长按** `START+SELECT` 或**长按** `HOME/MODE` 打开**现代化二级页面菜单**（5 个分类页 / 共 22 行）：`↑↓` 选择、`←→` 换页、`A` 进入数值编辑或切换开关、左摇杆调数值、`B` 返回。数值**必须先按 `A` 才能调**，避免误触 |
+| **上下填满 / 方形 / 去遮罩（双目）** | **已实现，待真机复测**：`VrScreenFillMode`。`FILL`（默认）保留左右眼各自的 MVP，在 `onFinishFrame()` 默认 framebuffer 上把两眼各重画到 `w/2 × 全高` 矩形 viewport，覆盖 Cardboard 的畸变合成 → 上下 100% 顶满、无圆角暗角/大黑边、每眼近方形；`DISTORTED` 一键回到原版镜头畸变。不改 shader、不改 SDK C++、不退化成单目 |
 | **等效瞳距 / 左右眼视差** | **已实现**：`ipdScale` 0.5~1.6x（默认 1.0 = 零改动），对左右眼最终裁剪坐标施加等大反向水平位移（`VrMatrix4.applyIpdShiftInto`）。**已放弃**旧做法「缩放 `viewMatrix[12]`」：SDK 的 `eyeFromHead`、离轴投影、畸变 mesh 同源于 `inter_lens_distance`，只改其一会让相机与视锥失配、左右眼无法融合。不改 shader、不改 SDK 参数 |
 | **重置中心点（头部追踪校准）** | **已实现**：把当前头朝向记为新的正前方；`VrHeadPose` 计算 `current * conj(center)` 相对旋转；VR 菜单动作项 + 手机设置页按钮均可触发 |
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
-| **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。用户反馈「状态栏隐藏了但不是全屏」后追加铺满修复；待真机复测 |
+| **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。**注意：window flags 只解决系统栏/刘海，消不掉截图里那种上下大黑边** —— 那来自 Cardboard 畸变 mesh 的 FOV 截断，由上面的 `screenFillMode` 解决 |
 | 真机 / 纸盒 / GFN 串流效果 | **真机反馈确认可用后又反馈失败，已第二轮修复**：`f77f482` 真机 logcat 定案「进 VR 啥也没有」是 `VrModeHost` 竞态，层级修复后用户确认「现在的确能使用了」。但随后 `7a9abfb` 版真机截图暴露：基础状态面板被 180° 反转、串流朝向不对、辅助线贴在 VR 面板里跟头转、状态栏仍显示。**这些画面效果已重新实现（见 §4 与 `HANDOFF.md` §13），全部待真机复测**。CI 只能证明「能编译 + 单测通过 + 能出 APK」，GLSL 运行时编译与视觉朝向 CI 抓不到 |
 
 > 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端与 VR 内手柄设置面板、
@@ -64,17 +65,20 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 | `L1 + R1` 同时按住 | 进入 / 退出 VR（任何状态下可用，按住期间只触发一次） |
 | **长按** `START + SELECT` ≥ 500 ms，或**长按** `HOME/MODE` ≥ 500 ms | VR 模式内打开设置菜单（`VrKeys.MENU_LONG_PRESS_MS`）；短按**不触发**，避免游戏里误触 |
 | 菜单关闭时其它所有按键（含短按 `SELECT`/`START`/`MODE`） | **原样透传给游戏**（走原有 `NativeStreamInputRouter`） |
-| 菜单打开：十字键 ↑ / ↓ | 上下选择项 |
-| 菜单打开：十字键 ← / → | 减小 / 增大当前项；按住 L1/R1/L2/R2 时 ×5 加速 |
-| 菜单打开：`A` / 十字键中间 | 确认 / 执行动作项 |
-| 菜单打开：单按 `B` / `SELECT` / `START` / `MODE` | 关闭菜单（没有 B 键也不会被困住） |
-| 菜单打开：左摇杆 | 同十字键，带死区与重复延迟 |
+| 菜单打开：十字键 ↑ / ↓ | **只**上下选择条目（可按住连选）；不会改任何数值 |
+| 菜单打开：十字键 ← / → | **只**切换二级分类页（画面 / 观看 / 操作 / 环境 / 快捷）；**不参与数值调整，也不参与 key-repeat** |
+| 菜单打开：`A` / 十字键中间 | 数值行：**进入 / 退出「编辑中」**（不改变数值）；开关 / 枚举行：立即切换；动作行：执行 |
+| 菜单打开：左摇杆 | **唯一能改数值的输入**，且**仅在 `A` 进入编辑中后生效**：左右 = 1 步、上下 = 5 步粗调，带死区与重复延迟 |
+| 菜单打开：单按 `B` / `SELECT` / `START` / `MODE` | 关闭菜单（没有 B 键也不会被困住）；编辑中会先退出编辑态 |
 
 > `START+SELECT` 原先是「退出 VR」组合键，改为长按菜单后已从 `VR_TOGGLE_COMBOS` 移除，
 > 现在**只**由 `L1+R1` 负责 VR 开关。长按计时依赖手柄的 OS key-repeat `ACTION_DOWN`（与
 > 菜单内长按十字键复用同一机制），触发后带 latch，松开任意键才允许再次触发。
+> 旧的「按住肩键 ×5 加速」已随数值编辑迁移到左摇杆而移除。
 
-屏幕右下角的小按钮只是**进入/退出 VR 的兜底入口**（没接手柄时用），不是操控方式。
+**进入 VR 的三个入口**（右下角常驻悬浮按钮已删除，因为容易误触）：
+① 外部主页面顶栏的原生「进入 VR」按钮；② 串流内 Quick Menu 的「进入 VR」项（点击会先收起菜单）；
+③ 手柄 `L1+R1`。设置页的 VR 模式开关也保留。VR 开启后画面上**没有任何浮层控件**。
 
 ---
 
@@ -84,7 +88,7 @@ VR 默认关闭。关闭时：`VrVideoSurfaceRegistry.target()` 返回 `null`、
 不进入 VR 也能改全部参数；改动通过 `VrSession.updateSettings()` 立即写入 `SharedPreferences`
 并同步给 VR 渲染，杀掉 App 重开后仍然保留。**画面上不再有常驻的 VR 设置浮层按钮。**
 
-**进入 / 退出 VR**：2D 模式右下角有一个小「进入 VR」入口（也可用手柄快捷键）；
+**进入 / 退出 VR**：主页面顶栏原生按钮、串流 Quick Menu、或手柄 `L1+R1`；
 VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手柄快捷键退出，
 串流不中断，退出后即可用手机软键盘打字。单目省电模式对低端机最有效，
 但纸盒 VR 请保持 `CARDBOARD` 双目。
@@ -99,6 +103,7 @@ VR 开启后画面上**没有任何浮层控件**，按**系统返回键**或手
 | `curvature` | 幕布曲率，0 = 纯平面 | 0.0 ~ 1.0（0.0） |
 | `screenVerticalOffset` | 画面垂直位置 | -1.0 ~ 1.0 m（0.0） |
 | `ipdScale` | **等效瞳距 / 左右眼视差**：调小左右眼画面靠拢更易重合、调大分离立体感更强；1.00x = 完全不改动 SDK 原版渲染（幕布与 360° 背景一起生效；单目 SIMULATION 模式不生效） | 0.5 ~ 1.6（1.0） |
+| `screenFillMode` | **画面上下填满 / 方形 / 去遮罩**：`FILL`（默认）= 双目 + 每眼 `w/2 × 全高` 矩形铺满，无圆角暗角和大黑边；`DISTORTED` = 回到 Cardboard 原版镜头畸变（有黑边、适配纸盒镜片）。**两种都保留左右眼不同矩阵，不是单目直显**。2D 设置页开关 + VR 菜单「画面填充」行 + 持久化 + 恢复默认 | `FILL` |
 | `viewerMode` | `CARDBOARD`（立体+畸变，插纸盒）/ `SIMULATION`（单目全屏，裸眼） | `CARDBOARD` |
 | `headTrackingEnabled` | 头部追踪开关（**仅影响视角**） | true |
 | `headTrackingSensitivity` | 追踪灵敏度 | 0.0 ~ 1.5（1.0） |
@@ -137,6 +142,29 @@ VR 内手柄菜单同样有「360° 背景图 / 背景亮度 / 串流左右镜�
 工作时 2D-only 界面上的 View）。现在改在 `onFinishFrame(viewport)` 里、SDK 完成畸变合成之后，
 用默认 framebuffer + 整屏 viewport + identity MVP 画一条 NDC `x=0, y=-1..0` 的白色细线：
 一条、正中央、笔直、不跟头转。
+
+**上下填满 / 方形 / 去遮罩（`screenFillMode`）**：截图里那种「四周大黑边 + 圆角暗角」**不是**
+Activity window flag 造成的，而是 Cardboard SDK 的畸变合成：`CardboardView.onRenderStereoFrame()`
+先把左右眼分别画进一个共享 FBO 的两个 `w/2 × 全高` viewport（**内容本来就是全高**），
+随后 `renderEyeToDisplay()` 用畸变 mesh 把 FBO 重投影到屏幕；该 mesh 的 FOV 在
+`lens_distortion.cc:189-194` 被 `std::min(几何角, device_fov)` 截断，只覆盖屏幕中间一块，
+于是上下被裁掉、边缘出现圆角。`FLAG_LAYOUT_NO_LIMITS` / 隐藏系统栏解决不了这个。
+
+`FILL` 的做法：SDK 正常画完 FBO 与畸变合成后，在 `onFinishFrame()` 里绑定默认 framebuffer，
+`glClear` 掉畸变结果，用 `onDrawEye()` 缓存下来的**左右眼各自最终 MVP**，把每只眼再画一次到
+`(0,0,w/2,h)` 和 `(w/2,0,w/2,h)` 两个矩形 viewport。矩形尺寸与 SDK 的 FBO viewport 完全一致，
+所以画面内容、比例、双目视差都不变，只是不再经过畸变 mesh —— 上下 100% 顶满、没有圆角 /
+暗角 / 中缝；横屏手机上每眼接近方形。中心辅助线仍在这之后画，层级不变。**不用单目、不改
+shader、不改 SDK C++、不动零拷贝视频通路**。
+
+**去掉畸变会不会「人眼看起来不正常」？** 会有影响，但不是致命的：SDK 的预畸变本来是用来
+**抵消纸盒凸透镜自身的桶形畸变**的。关掉之后戴纸盒看，画面边缘的直线会略微外凸、
+边角可能有轻微拉伸，边缘视场的舒适度不如原版；但中心区域清晰、双眼视差与深度完整、
+画面不再是「小圆窗 + 大黑边」。不戴纸盒（裸眼看手机 / 简易支架）则完全无影响，反而更满。
+所以做成了**随时可切回**的开关：2D 设置页关掉「画面上下填满（方形 / 去遮罩）」，或 VR 菜单
+「画面 → 画面填充」按 `A` 切到「原版（可回退）」，就回到逐像素一致的旧渲染。
+代码层面另有 `snapshot-20261108-pre-refactor` tag、`backup/pre-fullscreen-refactor-20261108`
+分支和一份 stash 作为整体回滚点。
 
 ---
 
@@ -184,15 +212,19 @@ VR 内手柄菜单同样有「360° 背景图 / 背景亮度 / 串流左右镜�
 | `42359823182` | `15315de` | **失败** | 菜单改长按 START+SELECT + HOME；同样因上一条的 private 访问失败（该提交基于含错误代码的 main） |
 | `42361113685` | `8294d61` | **失败** | 修 private 编译错误（`VrTheaterView.recenter()` public 包装）、`START+SELECT` 移出 VR 开关组合、HOME/MODE 也改长按、菜单带 latch。Kotlin 编译已通过，但 JVM 单测 `VrGamepadRouterTest` 第 55 行断言失败（计时起点落在第一个 key-repeat）；已在 `9d4ddd2` 修复 |
 | `42362976400` | `9d4ddd2` | 成功 | 长按计时起点前移到组合成立的初始 `ACTION_DOWN`、加 1499L 边界断言与注释订正；两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫） |
-| **`42366035113`** | **`d3a0f32`** | **成功** | **当前版本**：重做 IPD —— 放弃缩放 `viewMatrix[12]`（破坏 Cardboard `eyeFromHead` / 离轴投影 / 畸变 mesh 三者同源性，左右眼失配无法融合；真机反馈「ipd 调整不正常」），改为 `VrMatrix4.applyIpdShiftInto()` 在每眼最终 MVP 上做等大反向屏幕空间位移；`VrMatrix4Test` 删旧 2 例、新增 4 例。两 job 全绿。**效果待真机复测** |
+| **`42366035113`** | **`d3a0f32`** | **成功** | 重做 IPD —— 放弃缩放 `viewMatrix[12]`（破坏 Cardboard `eyeFromHead` / 离轴投影 / 畸变 mesh 三者同源性，左右眼失配无法融合；真机反馈「ipd 调整不正常」），改为 `VrMatrix4.applyIpdShiftInto()` 在每眼最终 MVP 上做等大反向屏幕空间位移；`VrMatrix4Test` 删旧 2 例、新增 4 例。两 job 全绿。**效果待真机复测** |
+| **`42438601098`** | **`6cac3e3`** | **成功** | **当前版本**：① **上下填满 / 方形 / 去遮罩**（`VrScreenFillMode`，默认 `FILL`）：`onFinishFrame()` 在默认 framebuffer 上用 `onDrawEye()` 缓存的左右眼各自 MVP，把两只眼重画到 `(0,0,w/2,h)` / `(w/2,0,w/2,h)` 全高矩形 viewport，覆盖 Cardboard 的畸变合成；`DISTORTED` 一键回到原版。**仍是双目立体，不是单目直显**；不改 shader / SDK C++ / 零拷贝视频通路。② VR 菜单重做为 **5 个二级分类页 / 22 行现代化 UI**（渐变背景、圆角卡片、分类 chip、编辑中 banner、数值进度条、开关胶囊）。③ 交互改为：十字键 ↑↓ **只选择**、←→ **只换页**、数值**必须先按 `A` 进入编辑态**且**仅左摇杆**可调（左右 1 步 / 上下 5 步）、开关/枚举行按 `A` 立即切换。④ 删除右下角常驻「进入 VR」按钮，改为外部主页面顶栏原生按钮 + 串流 Quick Menu 项 + `L1+R1`。⑤ `screenFillMode` 全程可调：2D 设置页开关、VR 菜单 ENUM 行、SharedPreferences 持久化、恢复默认。同步改动 `VrMenuModel` / `VrGamepadRouter` / `VrSession` / `VrSettings` / `VrSettingsStore` / `VrSettingSpec` / `VrSettingsSection` / `VrModeHost` / `OpenNowScreens` / `OpenNowStreamControls` / `OpenNowStreamSurface` 及 4 个测试文件；建立 `snapshot-20261108-pre-refactor` tag、`backup/pre-fullscreen-refactor-20261108` 分支与 stash 作为回滚点。两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫）。**全部画面效果与新手柄交互待真机复测** |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；
 > 「进 VR 啥也没有」由 `9c9cbc7` 修复 `VrModeHost` 竞态解决，用户已确认 VR 场景能正常显示。
 > **当前剩余的是画面效果复测**：基础 UI 是否正立、串流左右/上下朝向、辅助线是否固定在屏幕正中、
-> VR 画面是否铺满整个物理屏（含刘海/手势区）、瞳距调小/调大是否改变左右眼分离、重置中心点是否摆正、
+> **`FILL` 模式下左右眼是否真的上下 100% 顶满、大黑边/圆角暗角是否消失、戴纸盒看边缘直线外凸是否可接受**、
+> **切 `DISTORTED` 是否逐像素回到旧渲染**、瞳距调小/调大是否改变左右眼分离、重置中心点是否摆正、
+> **二级菜单 5 页显示是否完整、`A` 编辑门控与左摇杆细调/粗调手感、十字键 ←→ 换页是否顺手**、
+> **顶栏 / Quick Menu / `L1+R1` 三个入口是否都能进 VR 且不会再误触**、
 > 长按 500 ms 手感与手柄 key-repeat 是否可靠、退出 VR 后方向与系统栏/全屏 flags 是否恢复。
-> 详见第 6 节与 `HANDOFF.md` §13 / §14。
+> 详见第 6 节与 `docs/HANDOFF.md` §13 / §14 / §15。
 
 测试数量断言解析 `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0`
 且 `failures/errors == 0`，否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。
