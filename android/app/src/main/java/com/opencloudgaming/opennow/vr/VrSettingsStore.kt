@@ -35,6 +35,7 @@ class VrSettingsStore(context: Context) {
                 prefs.getString(K_FILL_MODE, VrSettings.DEFAULT.screenFillMode.name) ?: "",
             )
         }.getOrDefault(VrSettings.DEFAULT.screenFillMode),
+        zoomScale = prefs.getFloat(K_ZOOM, VrSettings.DEFAULT.zoomScale),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -59,6 +60,7 @@ class VrSettingsStore(context: Context) {
             .putFloat(K_BG_BRIGHT, s.backgroundBrightness)
             .putFloat(K_IPD_SCALE, s.ipdScale)
             .putString(K_FILL_MODE, s.screenFillMode.name)
+            .putFloat(K_ZOOM, s.zoomScale)
             .apply()
     }
 
@@ -82,5 +84,6 @@ class VrSettingsStore(context: Context) {
         const val K_BG_BRIGHT = "backgroundBrightness"
         const val K_IPD_SCALE = "ipdScale"
         const val K_FILL_MODE = "screenFillMode"
+        const val K_ZOOM = "zoomScale"
     }
 }

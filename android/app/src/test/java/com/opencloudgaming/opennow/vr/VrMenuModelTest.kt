@@ -8,7 +8,7 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(22, VrMenuModel.items.size)
+        assertEquals(23, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -169,6 +169,29 @@ class VrMenuModelTest {
         assertEquals(VrScreenFillMode.FILL, toggledBack.screenFillMode)
     }
 
+    /** "单纯放大" is a normal RANGE row: adjustable, clamped, and A-armed like every other value. */
+    @Test
+    fun zoomScaleRowStaysWithinItsDeclaredBounds() {
+        val s = VrSettings.DEFAULT
+        assertEquals(VrRanges.ZOOM_MIN, 1.00f, 1e-4f)
+        assertEquals(1.18f, s.zoomScale, 1e-4f)
+        assertTrue(VrMenuModel.display(s, VrMenuItemId.ZOOM_SCALE).isNotBlank())
+        assertEquals(
+            VrRanges.ZOOM_MAX,
+            VrMenuModel.adjust(s, VrMenuItemId.ZOOM_SCALE, 10_000).zoomScale,
+            1e-4f,
+        )
+        assertEquals(
+            VrRanges.ZOOM_MIN,
+            VrMenuModel.adjust(s, VrMenuItemId.ZOOM_SCALE, -10_000).zoomScale,
+            1e-4f,
+        )
+        val armed = VrMenuModel.confirm(s, VrMenuItemId.ZOOM_SCALE, editing = false)
+        assertEquals(s, armed.settings)
+        assertEquals(true, armed.editing)
+        assertEquals(false, VrMenuModel.confirm(s, VrMenuItemId.ZOOM_SCALE, editing = true).editing)
+    }
+
     @Test
     fun newToggleRowsAreReversible() {
         val s = VrSettings.DEFAULT
@@ -199,7 +222,7 @@ class VrMenuModelTest {
     @Test
     fun itemsForPageReturnsCorrectSublists() {
         val displayItems = VrMenuModel.itemsFor(VrMenuModel.pages[0])
-        assertEquals(9, displayItems.size)
+        assertEquals(10, displayItems.size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, displayItems.first().id)
         assertEquals(VrMenuItemId.VERTICAL_FLIP, displayItems.last().id)
 

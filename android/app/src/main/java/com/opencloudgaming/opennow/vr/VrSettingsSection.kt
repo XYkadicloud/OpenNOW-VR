@@ -61,11 +61,13 @@ fun VrSettingsSection() {
         ) { VrSession.setEnabled(it) }
 
         SettingSwitch(
-            label = "画面上下填满（方形 / 去遮罩）",
+            label = "画面上下填满（单纯放大）",
             checked = settings.screenFillMode == VrScreenFillMode.FILL,
-            description = "开启：左右眼各占满半个屏幕、上下顶满，画面变成规整方形，去掉圆角暗角和上下大黑边。" +
-                "关闭：回到之前的版本（Cardboard 原版镜头畸变校正，适配纸盒镜片，但四周有黑边）。" +
-                "两种方式都是双目立体，随时可切换；若戴纸盒看边缘变形明显，关掉即可回到原版。",
+            description = "开启：完全保留原来的双目立体 + 纸盒镜头畸变，只把最终画面整体等比放大，" +
+                "把上下大黑边顶出屏幕；双眼仍然重叠，画面不会变成方形、也不会去掉桶形校正。" +
+                "放大量由下面的「整体放大」滑块控制，1.00x 等于完全不放大。" +
+                "关闭：一键回到 Cardboard 原版（四周有黑边，适配纸盒镜片）。" +
+                "只保证上下填满，左右允许留一点黑边；放大过大时边缘会被裁掉，随时可调回。",
         ) { checked ->
             VrSession.updateSettings(
                 settings.copy(
@@ -166,6 +168,7 @@ fun VrSettingsSection() {
         Text(
             text = "串流画面始终是平面 2D（不做左右眼不同内容 / SBS）。若朝向不对，分别试开「左右镜像」和「上下翻转」，两项可叠加，默认都关、随时可恢复。" +
                 "「瞳距 / IPD 缩放」1.00x = 完全不改动（SDK 原版画面）；调小左右眼画面靠拢更容易重合、调大分离立体感更强，随时可恢复。该项作用于左右眼的最终画面位移，不改动 SDK 的瞳距/畸变参数。" +
+                "「整体放大」1.00x = 原版输出，往上调逐步把上下黑边顶满；这是纯最终画面后处理，不改 FOV / 投影 / 几何 / shader，双眼始终保持原来的重叠关系。" +
                 "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),

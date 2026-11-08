@@ -12,6 +12,9 @@ object VrKeys {
     const val ACTION_UP = 1
 
     const val BACK = 4
+    // KEYCODE_B (30) and KEYCODE_ESCAPE (111) are ordinary game keys, NOT back-stack keys.
+    // MainActivity's VR branch forwards them to the stream game and swallows them, so they can
+    // never reach the hidden 2D UI. Only KEYCODE_BACK (4) needs special VR handling.
     const val DPAD_UP = 19
     const val DPAD_DOWN = 20
     const val DPAD_LEFT = 21
@@ -53,6 +56,14 @@ object VrKeys {
     /** Single press closes the panel while it is open. */
     val MENU_CLOSE_KEYS = intArrayOf(BUTTON_SELECT, BUTTON_START, BUTTON_MODE)
 
-    // NOTE: shoulder-key "fast adjust" was retired when numeric editing moved to the left stick
-    // behind an A-armed edit mode. D-pad left/right now switches the settings PAGE instead.
+    /**
+     * Second-level PAGE navigation lives on the shoulder buttons (user request): LB = previous
+     * page, RB = next page. D-pad LEFT/RIGHT deliberately do NOTHING in the menu — the D-pad is
+     * selection-only (UP/DOWN) and numeric values belong to the left stick behind an A-armed
+     * edit mode. Keeping L1+R1 as the VR toggle is still safe because that combo is only checked
+     * while the menu is CLOSED.
+     */
+    const val PAGE_PREV_KEY = BUTTON_L1
+    const val PAGE_NEXT_KEY = BUTTON_R1
+
 }

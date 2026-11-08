@@ -840,6 +840,12 @@ StateFlow → `VrModeHost` → `VrTheaterView.applySettings` → renderer），`
 
 ## 15. 2026-11-08 第四轮：上下填满（双目）、二级菜单、A 门控编辑、入口重排（commit `6cac3e3`）
 
+> ⚠️ **历史记录，实现已作废**：本节 15.3 描述的 `FILL` =「缓存左右眼 MVP、在
+> `onFinishFrame()` 清掉畸变结果、左右半屏全高重画」这个方向，**已被真机反馈判定为错误并在
+> §16 全部替换**。它去掉了桶形校正、破坏了双眼重叠、也没能真正填满。保留本节只是为了记录
+> 决策过程和回滚点，**接手时请以 §16 为准，不要照本节改代码**。二级菜单 / A 门控 / 入口重排
+> 等其余部分仍然有效。
+
 ### 15.1 先纠正一次理解偏差（重要，别再犯）
 
 用户说「依然是不能够全屏铺满」，并贴截图说明「整个 VR 窗口要能上下填满，而不是有大的黑边」。
@@ -953,4 +959,118 @@ StateFlow → `VrModeHost` → `VrTheaterView.applySettings` → renderer），`
 - 长按菜单依赖手柄对 `START/SELECT/MODE` 发 OS key-repeat；若某手柄不发则不会触发。
 - `FILL` 绕开畸变，真实纸盒边缘可能变形；「保留畸变且铺满」需改 vendored
   `CalculateFov()` 并重编 AAR，风险高，暂不做。
+  → **此条已被 §16 解决**：不改 SDK，改为对最终合成画面做一次等比放大。
+
+---
+
+## 16. 2026-11-08 第五轮：真机四问 +「单纯放大」+ LB/RB 换页
+
+### 16.1 这一轮用户到底反馈了什么
+
+真机实测后用户连着指出四件事，随后又追加两条交互 / 画面方向：
+
+1. **VR 设置项没法操控**：「无法切换分页、也无法上下切换选择哪一个内容」。
+2. **按 `B` 很容易退出应用**：「`B` 在 Android 被映射成返回键」。
+3. **底层 2D 界面仍被操控**：「`Start` 键或点到后面画布可能突然弹出窗口」。
+4. **「方形」方向整个错了**：「我要依然是跟之前那样的，只不过呢它的画面视角改成方形」「并且要
+   双眼能够这样重叠」「并不需要左右填充嘛，只要上下填充完整就是了」。
+5. **换页换到肩键**：「不要用全部用摇杆和十字键来去换页选择什么的，换页的话…换成 LB 和 RB」。
+6. **「单纯放大」**：「能不能做成单纯放大…抓更大的大小来去弄到全屏差不多。当然了，不是说
+   全部填满只是上下至少要填满」。
+
+### 16.2 根因与修复（逐条）
+
+**(1) 菜单按键全部被 2D 吃掉。** `VrSession.onKeyEvent()` 原来对
+`isGamepadSource(event.source)` 做了门控。部分蓝牙手柄的 face button / D-pad 报
+`SOURCE_KEYBOARD`，于是每个菜单键都被交给 2D Compose，选行和换页自然都不动。修复：VR 开启时
+**不再做 source 门控**，所有按键先交给 `VrGamepadRouter`；router 只对一小份白名单发命令。
+VR 关闭时才保留 source 门控，保证手机软键盘和原 2D UI 完全不受影响。
+`onMotionEvent()` 同样去掉 source 门控（原来左摇杆会静默失效）。
+
+**(2) `B` 退出应用。** 旧 `MainActivity.dispatchKeyEvent()` 在 `KEYCODE_BACK` 的 `ACTION_DOWN`
+里直接 `VrSession.setEnabled(false)`；等到 `ACTION_UP` 时 VR 已经是 false，事件落到 2D back
+stack，`finish()` 了 Activity。修复：整个 BACK 的 DOWN+UP 序列由 VR 层无条件消费，**只在 UP 上
+动作** —— 菜单开着就关菜单，否则退出 VR（回到 2D，不结束应用）。同时 `MainActivity` 在 VR 开启
+时把所有未消费按键先转发给 `NativeStreamInputRouter` 再 `return true`，绝不落到 Compose。
+音量键是唯一例外（交回系统）。
+
+**(3) 底层 2D 被操控。** 三处隔离：
+- `dispatchKeyEvent()`：VR 开启时吞掉所有非 VR 键（普通键仍转发给串流游戏）；
+- `dispatchGenericMotionEvent()`：VR 开启时只转发 motion 给串流游戏，跳过
+  `dispatchGamepadHatNavigation()` 和 `super`，避免隐藏的 2D Compose 焦点被移动；
+- `dispatchTouchEvent()`：VR 开启时在原有触摸路由**之前**吞掉整个手势，避免点到不可见的 2D
+  画布弹窗。
+
+> ⚠️ **编译硬伤（本轮实际踩到并修好）**：`MainActivity.kt` 原本已经有
+> `override fun dispatchTouchEvent`（内含 `NativeStreamInputRouter` 的鼠标 / 触摸转发和
+> `postDispatchTouch` 的 finally）。第一版隔离代码又新增了一个同名 override，会直接编译失败。
+> 最终做法是把 VR 判断合并进**原有的**那个方法开头，不新增方法。改动前务必先 grep 是否已存在。
+
+**(4) FILL 改成「单纯放大」。** 废弃 `6cac3e3` 的 `frameMvps` / `drawVerticalFill()`，改为纯后处理：
+
+- 完全保留 SDK 原版双目 + 镜头畸变渲染（两只眼的矩阵、头部姿态、IPD 位移、360° 背景、
+  OES 零拷贝视频通路一律不动）；
+- `onFinishFrame()` 里用 `glCopyTexSubImage2D` 把已合成到默认 framebuffer 的最终画面拷进一张
+  RGBA `GL_TEXTURE_2D`；
+- 清黑，把 viewport 设成比屏幕大 `zoomScale` 倍并居中（GLES2 允许 viewport 超出
+  framebuffer，超出部分被裁掉），用 identity MVP + panel program 把整张图贴回去；
+- 上下黑边被顶出屏幕，左右允许保留小黑边；两只眼窗口一起长大，**重叠关系不变**；
+- 最后恢复全屏 viewport，再画固定屏幕层级的中心辅助线（辅助线不受放大影响）。
+
+不改 FOV、不改 projection、不改 geometry、不改 shader、不改 SDK C++、不退化成单目。
+
+**驱动兜底（必须保留）**：少数 GLES2 驱动会拒绝 RGB565 → RGBA8 的
+`glCopyTexSubImage2D`。如果盲目清屏 + 贴一张未定义纹理，用户会看到**全黑**，比黑边更糟。
+实现里首帧先 drain 旧 GL error、拷贝后 `glGetError()` 校验一次；失败则
+`zoomCopyUnsupported = true` 并**直接 return（不 clear）**，原画完好，之后永久降级到 SDK 原版。
+`onRendererShutdown()` 重置这两个标志，GL context 重建后重新校验。
+
+### 16.3 LB / RB 换页
+
+| 输入 | 菜单内行为 |
+|---|---|
+| D-pad ↑ / ↓ | 只 `MoveSelection`，长按可连发 |
+| D-pad ← / → | `Consumed`，**什么都不做**（用户明确不要十字键换页 / 调值） |
+| LB (`BUTTON_L1`) | `ChangePage(-1)` |
+| RB (`BUTTON_R1`) | `ChangePage(1)`，长按不连发，避免一次按住就翻到头 |
+| A / D-pad CENTER | RANGE 行进入 / 退出编辑态；TOGGLE / ENUM / ACTION 直接确认 |
+| B / SELECT / START / MODE | 关闭菜单 |
+| 左摇杆 | 仅在 A 已武装编辑态时 `Adjust`（←→ 细调 1 步，↑↓ 粗调 5 步） |
+
+`L1+R1` 仍是 VR 开关，但 `VrGamepadRouter.onKey()` 里 `if (!menuOpen && comboPressed())`
+保证菜单开着时这对肩键只负责换页、不会误退出 VR。`REPEATABLE_MENU_KEYS` 仍只含
+`DPAD_UP/DOWN`。
+
+### 16.4 新增可调项（全链路）
+
+`zoomScale`：`Float = 1.18f`，范围 `1.00..2.00`，步长 `0.02`，`1.00x` 严格 no-op。
+已接入 `VrRanges.ZOOM_*` → `VrSettings`（含 `sanitized()` 与 `DEFAULT`）→
+`VrSettingsStore.K_ZOOM`（SharedPreferences）→ `VrSettingSpecs.ALL`（2D 滑块
+「整体放大（上下填满）」）→ `VrMenuModel.ZOOM_SCALE`（VR 菜单「画面」页 RANGE 行）→
+「恢复默认」。`screenFillMode` 开关一键回到 `DISTORTED`。
+
+菜单总行数 22 → 23，`画面` 页 9 → 10 行，`pageRanges` 改为
+`listOf(0..9, 10..14, 15..17, 18..19, 20..22)`；`MENU_ROW_HEIGHT` 30f → 27f，
+最后一行进度条落在 `154 + 9*27 + 27 = 424 < 432`，不会被裁。
+
+`VrSettingsSection` 的旧文案「画面上下填满（方形 / 去遮罩）」及那段「左右眼各占满半个屏幕、
+变成规整方形、去掉圆角暗角」的描述**全部是错的**，已改成「单纯放大」并补上 1.00x 说明。
+
+### 16.5 测试更新
+
+- `VrGamepadRouterTest`：肩键换页而非 `Consumed`、十字键 ←→ 变 `Consumed`、
+  新增「按住肩键不连翻页」用例。
+- `VrMenuModelTest`：`items.size` 22 → 23、画面页 9 → 10、新增 `ZOOM_SCALE` 边界 / A 门控用例。
+- `VrSettingsTest`：默认 `1.18f` 在范围内、越界 sanitize 到 `ZOOM_MIN`。
+- `VrSettingSpecTest`：新增 `zoomScale` 滑块范围与 1.00x no-op 用例。
+
+### 16.6 待真机复测（CI 抓不到）
+
+- LB/RB 换页、十字键选行是否真的顺了（这是本轮最主要的真机验证点）；
+- `B` 是否只关菜单 / 退出 VR 而不再结束应用；
+- VR 开启后底层 2D 是否彻底不再响应按键 / 点击 / 摇杆焦点；
+- `zoomScale` 从 1.00 往上调，上下黑边是否按预期减少；双眼是否仍能重叠；
+- 放大后 VR 设置菜单四边是否被裁（1.18x 理论上留有余量，但要用真机确认）；
+- 若设备驱动不支持 `glCopyTexSubImage2D`，应自动降级为原版画面而非黑屏；
+- 菜单关闭时 `L1+R1` 仍能正常退出 VR。
 

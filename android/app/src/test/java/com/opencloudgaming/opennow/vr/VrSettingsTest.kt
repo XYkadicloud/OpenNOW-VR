@@ -18,7 +18,9 @@ class VrSettingsTest {
         assertTrue(s.gamepadDeadZone in VrRanges.DEAD_ZONE_MIN..VrRanges.DEAD_ZONE_MAX)
         assertTrue(s.menuRepeatMs in VrRanges.REPEAT_MIN_MS..VrRanges.REPEAT_MAX_MS)
         assertTrue(s.ipdScale in VrRanges.IPD_SCALE_MIN..VrRanges.IPD_SCALE_MAX)
+        assertTrue(s.zoomScale in VrRanges.ZOOM_MIN..VrRanges.ZOOM_MAX)
         assertEquals(1.0f, s.ipdScale, 0f)
+        assertEquals(1.18f, s.zoomScale, 0f)
         assertEquals(VrViewerMode.CARDBOARD, s.viewerMode)
     }
 
@@ -34,6 +36,7 @@ class VrSettingsTest {
             gamepadDeadZone = -1f,
             menuRepeatMs = 0L,
             ipdScale = 99f,
+            zoomScale = -5f,
         )
         val s = wild.sanitized()
         assertEquals(VrRanges.SCREEN_SCALE_MAX, s.screenScale, 0f)
@@ -44,6 +47,7 @@ class VrSettingsTest {
         assertEquals(VrRanges.HEAD_SENSITIVITY_MAX, s.headTrackingSensitivity, 0f)
         assertEquals(VrRanges.DEAD_ZONE_MIN, s.gamepadDeadZone, 0f)
         assertEquals(VrRanges.REPEAT_MIN_MS, s.menuRepeatMs)
+        assertEquals(VrRanges.ZOOM_MIN, s.zoomScale, 0f)
     }
 
     @Test

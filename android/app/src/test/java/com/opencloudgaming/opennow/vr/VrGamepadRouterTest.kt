@@ -116,10 +116,16 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_MODE))
     }
 
-    /** The L1+R1 toggle combo is disabled while the menu is open (shoulders are fast-adjust there). */
+    /**
+     * LB / RB are the second-level PAGE keys (user request). The L1+R1 VR toggle is suppressed
+     * while the panel is open, so the same physical shoulders can safely own both roles.
+     */
     @Test
-    fun shoulderComboDoesNotToggleVrWhileTheMenuIsOpen() {
+    fun shoulderButtonsPageTheMenuInsteadOfTogglingVr() {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.ChangePage(-1), press(r, VrKeys.BUTTON_L1))
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.BUTTON_R1))
+        // Even with both shoulders held at once, the VR toggle must NOT fire inside the menu.
         assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_L1))
         assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_R1))
     }
@@ -129,11 +135,27 @@ class VrGamepadRouterTest {
         val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
         assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP))
         assertEquals(VrCommand.MoveSelection(1), press(r, VrKeys.DPAD_DOWN))
-        assertEquals(VrCommand.ChangePage(-1), press(r, VrKeys.DPAD_LEFT))
-        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.DPAD_RIGHT))
+        // D-pad LEFT/RIGHT are deliberately inert: they must neither page nor change a value,
+        // and must never fall through to the hidden 2D Compose UI.
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.DPAD_LEFT))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.DPAD_RIGHT))
+        assertEquals(VrCommand.ChangePage(-1), press(r, VrKeys.PAGE_PREV_KEY))
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.PAGE_NEXT_KEY))
         assertEquals(VrCommand.Confirm, press(r, VrKeys.DPAD_CENTER))
         assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_X))
         assertEquals(VrCommand.Consumed, release(r, VrKeys.BUTTON_X))
+    }
+
+    /** Holding a shoulder must not fling the user across several category pages. */
+    @Test
+    fun heldShoulderDoesNotRepeatPageChanges() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.PAGE_NEXT_KEY, 1000L))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.PAGE_NEXT_KEY, 1100L))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.PAGE_NEXT_KEY, 5000L))
+        assertEquals(VrCommand.Consumed, release(r, VrKeys.PAGE_NEXT_KEY, 5100L))
+        // A genuinely new press changes exactly one more page.
+        assertEquals(VrCommand.ChangePage(1), press(r, VrKeys.PAGE_NEXT_KEY, 5200L))
     }
 
     @Test

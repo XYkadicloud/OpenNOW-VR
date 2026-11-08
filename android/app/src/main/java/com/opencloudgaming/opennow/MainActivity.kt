@@ -273,18 +273,19 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         mascotActivity.onKey(event)
-        // OpenNOW-VR: BACK exits VR without interrupting the stream, restoring the flat 2D UI and
-        // the soft keyboard. Consumed before the gamepad/stream routers so it cannot be swallowed.
-        if (VrSession.enabled.value &&
-            event.keyCode == KeyEvent.KEYCODE_BACK &&
-            event.action == KeyEvent.ACTION_DOWN
-        ) {
-            VrSession.setEnabled(false)
+        // OpenNOW-VR: the VR layer gets first refusal. It owns the whole BACK/B down+up sequence,
+        // the in-VR settings panel, LB/RB paging and the L1+R1 toggle (see VrSession.onKeyEvent).
+        if (VrSession.onKeyEvent(event)) return true
+        if (VrSession.enabled.value) {
+            // CRITICAL INPUT ISOLATION: the 2D phone UI is still composed behind the top-most VR
+            // GL SurfaceView. With VR on, a key the VR layer did not consume may reach the STREAM
+            // GAME but must NEVER reach Compose — otherwise D-pad moves focus behind the headset,
+            // START pops the Quick Menu and BACK/B finishes the Activity. Volume keys are the one
+            // exception (system behaviour).
+            if (event.isAndroidVolumeKey()) return super.dispatchKeyEvent(event)
+            NativeStreamInputRouter.dispatchKey(event)
             return true
         }
-        // VR gamepad commands get first refusal. With VR off this returns false for every key
-        // except the L1+R1 / SELECT+START toggle combo.
-        if (VrSession.onKeyEvent(event)) return true
         if (streamSystemUiActive && event.action == KeyEvent.ACTION_DOWN && event.shouldReapplyStreamSystemUi()) {
             enforceStreamSystemUiFromInput()
         }
@@ -366,6 +367,11 @@ class MainActivity : ComponentActivity() {
         mascotActivity.onMotion(event)
         // Consumed only while the VR menu is open; otherwise the game keeps all stick input.
         if (VrSession.onMotionEvent(event)) return true
+        if (VrSession.enabled.value) {
+            // No hat/DPAD navigation of the hidden 2D Compose UI while the headset view is up.
+            NativeStreamInputRouter.dispatchMotion(event)
+            return true
+        }
         val mouseLikePointer = event.isMouseLikePointerEvent()
         if (streamSystemUiActive && (mouseLikePointer || event.isControllerMotionEvent())) {
             enforceStreamSystemUiFromInput()
@@ -445,6 +451,12 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         mascotActivity.onTouch(event)
+        // OpenNOW-VR INPUT ISOLATION. The 2D phone UI is still composed behind the top-most VR
+        // GL SurfaceView. A stray touch on the phone (or the headset touchpad) would otherwise
+        // open a dialog / toggle a control that is completely invisible under the VR picture.
+        // Swallow the whole gesture BEFORE the original stream touch router and before super;
+        // with VR off everything below keeps its original behaviour, untouched.
+        if (VrSession.enabled.value) return true
         try {
             val decorView = window?.decorView
             if (streamSystemUiActive && event.isMouseLikePointerEvent()) {

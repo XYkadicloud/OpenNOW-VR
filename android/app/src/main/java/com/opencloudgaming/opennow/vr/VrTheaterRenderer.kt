@@ -27,6 +27,7 @@ import java.util.Locale
 import java.util.Random
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * Renders the "half VR" theatre on CardboardView.Renderer.
@@ -160,31 +161,40 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private var lineTextureId = 0
 
     // -----------------------------------------------------------------------------------------
-    // "上下填满" FILL (VrScreenFillMode.FILL) — cached per-eye MVPs, replayed on the DEFAULT
-    // framebuffer in onFinishFrame().
+    // "单纯放大 / 上下填满" FILL (VrScreenFillMode.FILL) — a PURE POST-PROCESS of the FINISHED
+    // stereo frame. Nothing above this line in the render path is changed.
     //
-    // Root cause of the big black bands: CardboardView.onRenderStereoFrame() renders BOTH eyes
-    // into a shared FBO using two HALF-width / FULL-height viewports (w/2 x h), then calls
-    // renderEyeToDisplay() which re-projects that FBO through a lens-distortion mesh. That mesh
-    // is built from a FOV clamped to the device params (lens_distortion.cc:189-194), so it covers
-    // only the middle of the screen -> round corners + big black bands above/below + centre gap.
+    // The user's 2026-11-08 screenshot shows two barrel-shaped eye windows with big black bands
+    // above/below. Those bands come from the SDK's lens-distortion MESH, whose FOV is clamped to
+    // the device params (lens_distortion.cc:189-194). An earlier attempt re-drew both eyes into
+    // rectangular half-screen viewports: that removed the distortion but ALSO removed the barrel
+    // correction, broke eye fusion and still left the picture a narrow banner, because the SDK's
+    // off-axis projection was reused unchanged. WRONG DIRECTION.
     //
-    // The FBO CONTENT is already full-height. We keep stereo rendering exactly as-is (both eye
-    // MVPs, head pose, IPD shift, 360° background), cache each eye's final MVP, then in
-    // onFinishFrame() — after the SDK has composited — clear the default framebuffer and draw
-    // each eye once more into its own rectangular half-screen viewport (w/2 x FULL height). The
-    // distortion result is overwritten by two edge-to-edge rectangles: no vignette, no rounded
-    // corners, no centre gap, 100% vertical fill, and a near-SQUARE viewport per eye on a
-    // landscape phone. Both eyes still use DIFFERENT matrices, so this is NOT monocular / 2D
-    // direct display. No shader source change, no SDK C++ change, zero-copy video path untouched.
+    // Correct approach ("单纯放大"): keep 100% of the original stereo + distortion rendering, then
+    // in onFinishFrame() copy the composited default framebuffer into a texture and blit it back
+    // with ONE centred, UNIFORM zoom (VrSettings.zoomScale). The black bands are pushed off the
+    // screen edges; both eye windows grow together so they still overlap/fuse in a cardboard
+    // viewer. Only the vertical direction is guaranteed to fill — the horizontal edges may keep
+    // a small black margin, exactly as requested. No FOV / projection / geometry / shader / SDK
+    // C++ change, and the zero-copy OES video path is untouched.
     // -----------------------------------------------------------------------------------------
-    private val frameMvps = arrayOf(FloatArray(16), FloatArray(16))
-    private var frameMvpCount = 0
-    /** Snapshot of what onDrawEye() decided, consumed by onFinishFrame(). */
-    private var frameUseVideo = false
-    private var frameDrawPanel = true
     private var surfaceWidth = 0
     private var surfaceHeight = 0
+    private var zoomTextureId = 0
+    private var zoomTexWidth = 0
+    private var zoomTexHeight = 0
+    /**
+     * glCopyTexSubImage2D from a window framebuffer is legal in GLES2 but a few drivers reject
+     * the RGB565->RGBA8 conversion. If it fails we must NOT clear+blit an undefined texture (that
+     * would turn the whole screen black), so we verify once and permanently fall back to the
+     * untouched SDK frame. Reset in onRendererShutdown() so a new GL context is re-verified.
+     */
+    private var zoomCopyVerified = false
+    private var zoomCopyUnsupported = false
+    /** Static full-screen NDC quad (TRIANGLE_STRIP); filled once in onSurfaceCreated. */
+    private val zoomPositionBuffer: FloatBuffer = newFloatBuffer(12)
+    private val zoomTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
 
     // Preallocated paints for the modern two-level menu. Allocated once in createPanelResources();
     // drawMenu()/drawStatus() only re-assign colours, so the render loop stays allocation-free.
@@ -255,6 +265,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         rebuildMesh()
         buildBackgroundMesh()
         createLineResources()
+        createZoomQuad()
         meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
         uploadPanel()
@@ -266,10 +277,6 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     }
 
     override fun onNewFrame(headTransform: HeadTransform) {
-        // onNewFrame() runs exactly once per frame, BEFORE onDrawEye() (once in monocular mode,
-        // twice in stereo). Reset the per-eye MVP cache here so onFinishFrame() always replays
-        // THIS frame's matrices only.
-        frameMvpCount = 0
         headTransform.getQuaternion(headQuaternion, 0)
         if (VrVideoSurfaceRegistry.consumeFrameAvailable()) {
             if (!logFirstFrameAvailable) {
@@ -371,19 +378,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             VrMatrix4.applyIpdShiftInto(mvpMatrix, current.ipdScale, eyeSign)
         }
 
-        // Cache this eye's FINAL MVP for the FILL replay. onNewFrame() resets the count once per
-        // frame; Cardboard calls onDrawEye() LEFT first, then RIGHT (once in monocular mode).
-        if (frameMvpCount < frameMvps.size) {
-            System.arraycopy(mvpMatrix, 0, frameMvps[frameMvpCount], 0, 16)
-            frameMvpCount++
-        }
-
-        // Decide once what this frame contains, then snapshot it for the replay.
         val showPanel = useVideo || menuOpen || current.showStatus
         val activeHandles = if (useVideo) video else panel
         val drawPanel = showPanel && activeHandles != null && vertexCount != 0
-        frameUseVideo = useVideo
-        frameDrawPanel = drawPanel
 
         // Dev-only, edge-triggered diagnostics: a healthy render loop stays log-silent.
         if (!showPanel) {
@@ -415,9 +412,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     /**
      * Draws ONE eye's complete scene (360° sphere first, then the flat cinema quad) with the given
-     * MVP. Called by onDrawEye() into the Cardboard FBO, and — in FILL mode — again by
-     * onFinishFrame() straight onto the default framebuffer. Same MVP, same viewport size, same
-     * textures: an identical picture, minus the lens-distortion composite.
+     * MVP into the Cardboard SDK's FBO. This is ONLY ever called from onDrawEye(): the "单纯放大"
+     * FILL mode does not re-render the scene, it zooms the finished composite afterwards.
      */
     private fun drawEyeScene(
         mvp: FloatArray,
@@ -470,45 +466,147 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
      * the VR GL SurfaceView is setZOrderOnTop(true).
      */
     override fun onFinishFrame(viewport: Viewport) {
-        // FILL overwrites the distortion composite BEFORE the fixed alignment line is drawn, so
-        // the line still lands on the true physical-screen layer at the exact centre.
+        // Zoom the FINISHED composite (which still has both eyes + lens distortion), then draw the
+        // fixed screen-space alignment line last so it is never scaled with the picture.
         if (settings.screenFillMode == VrScreenFillMode.FILL) {
-            drawVerticalFill(viewport, settings)
+            drawZoomFill(viewport, settings)
         }
         drawScreenSpaceAlignmentLine(settings, viewport)
     }
 
     /**
-     * FILL: replays both eyes as edge-to-edge rectangles on the DEFAULT framebuffer. Cardboard's
-     * FBO viewports are already (0,0,w/2,h) and (w/2,0,w/2,h); reusing the SAME sizes here gives
-     * 100% vertical fill with no rounded corners / vignette / centre gap and a near-square viewport
-     * per eye on a landscape phone. Both cached MVPs differ, so stereo depth is preserved — this
-     * is NOT setStereoRenderMode(false) and NOT a monocular 2D direct display.
+     * "单纯放大": copy the SDK's finished stereo+distortion frame into a texture, clear to black,
+     * then blit it back with ONE centred, UNIFORM zoom.
+     *
+     * Nothing is re-rendered: both eye matrices, the barrel correction, head pose, IPD shift, the
+     * 360° background and the zero-copy OES video path are all left exactly as Cardboard produced
+     * them. Enlarging the whole composite pushes the black bands off the top/bottom edges while
+     * the two eye windows grow together, so they keep fusing in a viewer. A viewport LARGER than
+     * the framebuffer is legal in GLES2 — the overshoot is clipped, which is precisely how the
+     * bands disappear. The horizontal edges may still keep a small black margin, as requested.
+     *
+     * zoomScale == 1.00 short-circuits, and VrScreenFillMode.DISTORTED skips this entirely, so
+     * the original rendering is always one setting away.
      */
-    private fun drawVerticalFill(viewport: Viewport, s: VrSettings) {
-        if (frameMvpCount == 0) return
+    private fun drawZoomFill(viewport: Viewport, s: VrSettings) {
         val w = if (viewport.width > 0) viewport.width else surfaceWidth
         val h = if (viewport.height > 0) viewport.height else surfaceHeight
         if (w <= 0 || h <= 0) return
+        val zoom = s.zoomScale
+        if (zoom <= 1.001f) return
+        if (zoomCopyUnsupported) return
+        val prog = panel ?: return
+        if (!ensureZoomTexture(w, h)) return
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
-        GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        // Deliberately do NOT touch GL_BLEND: the finished frame is still on screen at this point,
+        // and leaving the SDK's own state alone means a failed copy can fall back with zero damage.
+
+        // 1. Snapshot the finished frame. glCopyTexSubImage2D reads the currently bound READ
+        //    framebuffer (default = 0), origin bottom-left — the same origin the texture uses.
+        if (!zoomCopyVerified) {
+            // Drain stale errors from the SDK's distortion pass so we only judge OUR copy.
+            var drained = 0
+            while (drained < 8 && GLES20.glGetError() != GLES20.GL_NO_ERROR) drained++
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
+        GLES20.glCopyTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+        if (!zoomCopyVerified) {
+            if (GLES20.glGetError() != GLES20.GL_NO_ERROR) {
+                zoomCopyUnsupported = true
+                Log.w(TAG, "zoom FILL disabled: glCopyTexSubImage2D failed; keeping original SDK frame")
+                return
+            }
+            zoomCopyVerified = true
+        }
+
+        // 2. Black behind the enlarged picture (only visible if zoom is small / aspect differs).
         GLES20.glViewport(0, 0, w, h)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        if (frameMvpCount == 1) {
-            // Monocular (SIMULATION): one eye, one full-screen viewport.
-            drawEyeScene(frameMvps[0], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
+        // 3. One centred uniform zoom of the WHOLE composite. Identity MVP => the quad's NDC
+        //    coords already span the viewport, so the viewport itself does the scaling.
+        val zoomedW = (w * zoom).roundToInt()
+        val zoomedH = (h * zoom).roundToInt()
+        GLES20.glViewport((w - zoomedW) / 2, (h - zoomedH) / 2, zoomedW, zoomedH)
+
+        GLES20.glUseProgram(prog.program)
+        GLES20.glUniformMatrix4fv(prog.mvp, 1, false, identityMatrix, 0)
+        GLES20.glUniform1f(prog.brightness, 1f)
+        GLES20.glUniform1f(prog.flip, 0f)
+        GLES20.glUniform1i(prog.texture, 0)
+
+        zoomPositionBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(prog.position)
+        GLES20.glVertexAttribPointer(prog.position, 3, GLES20.GL_FLOAT, false, 12, zoomPositionBuffer)
+        zoomTexCoordBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(prog.texCoord)
+        GLES20.glVertexAttribPointer(prog.texCoord, 2, GLES20.GL_FLOAT, false, 8, zoomTexCoordBuffer)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(prog.position)
+        GLES20.glDisableVertexAttribArray(prog.texCoord)
+
+        // Restore the full-screen viewport. The alignment line reasserts its own anyway, but the
+        // SDK may also draw after onFinishFrame() on some devices.
+        GLES20.glViewport(0, 0, w, h)
+    }
+
+    /** Allocates / resizes the RGBA snapshot texture. GL thread only, zero per-frame allocation. */
+    private fun ensureZoomTexture(w: Int, h: Int): Boolean {
+        if (zoomTextureId == 0) {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            zoomTextureId = ids[0]
+            if (zoomTextureId == 0) return false
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
         } else {
-            val half = w / 2
-            GLES20.glViewport(0, 0, half, h)
-            drawEyeScene(frameMvps[0], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
-            GLES20.glViewport(half, 0, w - half, h)
-            drawEyeScene(frameMvps[1], s, frameUseVideo, frameDrawPanel, allowBackgroundLoad = false)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, zoomTextureId)
         }
+        if (zoomTexWidth != w || zoomTexHeight != h) {
+            // NPOT textures are valid in GLES2 with CLAMP_TO_EDGE and no mipmaps.
+            GLES20.glTexImage2D(
+                GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null,
+            )
+            zoomTexWidth = w
+            zoomTexHeight = h
+        }
+        return true
+    }
+
+    /**
+     * Static full-screen NDC quad. glCopyTexSubImage2D and glTexImage2D both use a bottom-left
+     * origin, so v=0 at the quad's bottom edge reproduces the finished frame upright with uFlip=0.
+     */
+    private fun createZoomQuad() {
+        zoomPositionBuffer.clear()
+        zoomPositionBuffer.put(
+            floatArrayOf(
+                -1f, -1f, 0f,
+                1f, -1f, 0f,
+                -1f, 1f, 0f,
+                1f, 1f, 0f,
+            ),
+        )
+        zoomPositionBuffer.position(0)
+        zoomTexCoordBuffer.clear()
+        zoomTexCoordBuffer.put(
+            floatArrayOf(
+                0f, 0f,
+                1f, 0f,
+                0f, 1f,
+                1f, 1f,
+            ),
+        )
+        zoomTexCoordBuffer.position(0)
     }
 
     /** The SDK forwards the REAL GL surface size here (and calls setScreenParams on it). */
@@ -530,6 +628,15 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             GLES20.glDeleteTextures(1, intArrayOf(lineTextureId), 0)
             lineTextureId = 0
         }
+        if (zoomTextureId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(zoomTextureId), 0)
+            zoomTextureId = 0
+        }
+        zoomTexWidth = 0
+        zoomTexHeight = 0
+        // A new GL context may support the copy even if the previous one did not.
+        zoomCopyVerified = false
+        zoomCopyUnsupported = false
         if (panelTextureId != 0) {
             GLES20.glDeleteTextures(1, intArrayOf(panelTextureId), 0)
             panelTextureId = 0
@@ -557,7 +664,6 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         menuTabPaint = null
         menuGradientPaint = null
         vertexCount = 0
-        frameMvpCount = 0
         surfaceWidth = 0
         surfaceHeight = 0
         hasVideoFrame = false
@@ -766,8 +872,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     /**
      * MODERN TWO-LEVEL SETTINGS PANEL. Category chips on top, then ONLY the active page's rows as
-     * rounded cards with value readouts and progress tracks. Numeric rows are edited ONLY after A
-     * arms editing (banner turns into "编辑中"), and only the left stick can move a value.
+     * rounded cards with value readouts and progress tracks. LB/RB switch pages, D-pad UP/DOWN
+     * select a row. Numeric rows are edited ONLY after A arms editing (banner turns into "编辑中"),
+     * and only the left stick can move a value.
      */
     private fun drawMenu(canvas: Canvas, s: VrSettings) {
         val title = titlePaint ?: return
@@ -839,7 +946,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val banner = if (editing) {
             "编辑中 · 左摇杆 ←→ 细调 / ↑↓ 快调 · A 完成 · B 返回"
         } else {
-            page.subtitle + "   ·   ↑↓ 选择   ←→ 换页   A 编辑 / 开关"
+            page.subtitle + "   ·   ↑↓ 选择   LB/RB 换页   A 编辑 / 开关"
         }
         canvas.drawText(banner, 36f, 135f, hint)
 
@@ -848,7 +955,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         val selected = VrSession.selectedIndex.value
         val firstIndex = VrMenuModel.firstIndexOf(page)
         val rowTop0 = 154f
-        val rowH = 30f
+        // The "画面" page now has 10 rows; 27f keeps the last row's progress track above the
+        // 432px panel bottom (154 + 10*27 = 424).
+        val rowH = MENU_ROW_HEIGHT
         pageItems.forEachIndexed { row, item ->
             val index = firstIndex + row
             val top = rowTop0 + row * rowH
@@ -1240,10 +1349,10 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         const val PANEL_W = 768
         const val PANEL_H = 432
         const val MENU_ASPECT = 16f / 9f
-        // 20 rows fit exactly in two columns of 10; 30px rows keep the last baseline (366) clear
-        // of the bottom hint (408) on the 432px-tall panel.
+        // The largest second-level page has 10 rows. 27px rows keep the last baseline and its
+        // progress track inside the 432px-tall panel (154 + 10*27 = 424).
         const val MENU_ROWS_PER_COLUMN = 10
-        const val MENU_ROW_HEIGHT = 30f
+        const val MENU_ROW_HEIGHT = 27f
 
         /** [gradient start, gradient end, card, stroke, accent, track, primary text, muted text]. */
         val MENU_COLORS: IntArray = intArrayOf(

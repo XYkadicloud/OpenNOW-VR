@@ -115,13 +115,55 @@ object VrSession {
         syncRouter()
     }
 
+    /**
+     * Decides every physical key while VR is on.
+     *
+     * TWO real-device bugs fixed here (2026-11-08):
+     *  1. Only `isGamepadSource()` events used to reach the router. Several Bluetooth pads report
+     *     their face buttons / D-pad as SOURCE_KEYBOARD, so every menu key was handed to the 2D
+     *     Compose UI instead: rows could not be selected and pages could not be switched. While
+     *     VR is enabled we therefore do NOT gate on source — the router only emits commands for a
+     *     small explicit key whitelist and leaves everything else alone.
+     *  2. KEYCODE_BACK (which is what many pads map B to) used to be swallowed on ACTION_DOWN
+     *     while VR was turned off in the same call. ACTION_UP then saw VR==false, fell through to
+     *     the 2D back stack and FINISHED THE ACTIVITY. We now consume the whole down+up sequence
+     *     and act only on the up.
+     *
+     * MainActivity additionally drops all non-VR keys once this returns false, so nothing can
+     * reach the 2D UI behind the headset.
+     */
     fun onKeyEvent(event: KeyEvent): Boolean {
-        val isGamepad = isGamepadSource(event.source)
-        return handle(router.onKey(event.keyCode, event.action, isGamepad, event.eventTime))
+        val keyCode = event.keyCode
+        val action = event.action
+
+        if (_enabled.value) {
+            // Back-like keys are owned by the VR layer for BOTH actions, unconditionally.
+            if (keyCode == VrKeys.BACK) {
+                if (action == VrKeys.ACTION_UP) {
+                    if (_menuOpen.value) setMenuOpen(false) else setEnabled(false)
+                }
+                return true
+            }
+            val command = router.onKey(keyCode, action, isGamepad = true, event.eventTime)
+            if (router.menuOpen) {
+                // The settings panel owns input exclusively: even a key the router does not know
+                // must not reach the 2D UI or the stream game.
+                if (command == VrCommand.PassThrough) return true
+                return handle(command)
+            }
+            return handle(command)
+        }
+
+        // VR off: only real controller events may trigger L1+R1 to ENTER VR. Keep the source gate
+        // here so the phone's soft keyboard and the normal 2D UI are completely untouched.
+        if (!isGamepadSource(event.source)) return false
+        return handle(router.onKey(keyCode, action, isGamepad = true, event.eventTime))
     }
 
     fun onMotionEvent(event: MotionEvent): Boolean {
-        if (!router.menuOpen || !isGamepadSource(event.source)) return false
+        // No source gate while the VR menu is open: some pads report axes from a keyboard-ish
+        // source, which used to make the left stick silently do nothing.
+        if (!_enabled.value || !router.menuOpen) return false
         val x = event.getAxisValue(VrKeys.AXIS_X)
         val y = event.getAxisValue(VrKeys.AXIS_Y)
         return handle(router.onAxis(x, y, event.eventTime))

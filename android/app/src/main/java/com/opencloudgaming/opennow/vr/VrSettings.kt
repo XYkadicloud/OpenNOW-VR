@@ -6,20 +6,23 @@ enum class VrViewerMode { CARDBOARD, SIMULATION }
 /**
  * How the stereo picture occupies the PHYSICAL screen (the "全屏填充" control).
  *
- * DISTORTED = original Cardboard path. CardboardView.onRenderStereoFrame() calls
+ * DISTORTED = original Cardboard path, unchanged. CardboardView.onRenderStereoFrame() calls
  * renderEyeToDisplay(), which warps both eyes through a lens-distortion mesh. That mesh is built
  * from a FOV clamped to the device params (lens_distortion.cc:189-194), so it only covers the
- * middle of the screen: large BLACK BANDS above/below and a gap between the two eyes. This is the
- * round/barrel look in the user's screenshot.
+ * middle of the screen: the round/barrel eye windows with BLACK BANDS above/below in the user's
+ * screenshot. This is the exact "之前那样" rendering and the one-click rollback.
  *
- * FILL = keep BOTH eyes (real stereo), but bypass that distortion composite. onFinishFrame()
- * re-draws each eye into a rectangular half-screen viewport (w/2 x FULL height) using the very
- * same eye MVP the SDK used for the FBO. The FBO content is already full-height, so the result is
- * edge-to-edge vertically, with no rounded corners, no vignette and no centre gap.
+ * FILL = "单纯放大". The SDK stereo + lens-distortion rendering is left COMPLETELY intact (both
+ * eye matrices, head pose, IPD shift, barrel correction, 360° background — everything). Once it
+ * has been composited onto the default framebuffer, onFinishFrame() copies that finished picture
+ * into a texture and blits it back with a centred, UNIFORM zoom of [VrSettings.zoomScale]. The
+ * black bands are simply pushed off the edges; both eyes grow together so they still fuse in a
+ * viewer. No FOV change, no projection change, no new geometry, no shader change, no SDK C++
+ * change. Only the vertical direction is GUARANTEED to fill; the horizontal edges are allowed to
+ * keep a small black margin ("不是说全部填满只是上下至少要填满").
  *
- * This is NOT "monocular / direct 2D display": both eye matrices are still used, so stereo depth
- * is preserved. Fully adjustable and revertible; DEFAULT is FILL because that is the requested
- * behaviour.
+ * Adjustable and revertible: zoomScale = 1.00 is a no-op, and DISTORTED skips the post-process
+ * entirely. DEFAULT is FILL because that is the requested behaviour.
  */
 enum class VrScreenFillMode { DISTORTED, FILL }
 
@@ -61,6 +64,11 @@ object VrRanges {
     const val IPD_SCALE_MIN = 0.5f
     const val IPD_SCALE_MAX = 1.6f
     const val IPD_SCALE_STEP = 0.05f
+
+    /** Uniform post-process zoom used by VrScreenFillMode.FILL. 1.00 = original SDK output. */
+    const val ZOOM_MIN = 1.00f
+    const val ZOOM_MAX = 2.00f
+    const val ZOOM_STEP = 0.02f
 
     const val REPEAT_MIN_MS = 60L
     const val REPEAT_MAX_MS = 500L
@@ -118,11 +126,19 @@ data class VrSettings(
      */
     val ipdScale: Float = 1.0f,
     /**
-     * DISTORTED = original Cardboard stereo + lens-distortion mesh (round vignette, big black
-     * bands top/bottom). FILL = both eyes retained, distortion composite bypassed, rectangular
-     * half-screen viewports with FULL height — i.e. "上下填满 / 没有大黑边".
+     * DISTORTED = original Cardboard stereo + lens-distortion mesh (round windows, black bands
+     * top/bottom). FILL = the SAME stereo + distortion, uniformly enlarged afterwards until the
+     * vertical direction is filled. One-click rollback to DISTORTED at any time.
      */
     val screenFillMode: VrScreenFillMode = VrScreenFillMode.FILL,
+    /**
+     * "单纯放大": uniform zoom applied to the FINISHED stereo frame in onFinishFrame().
+     * 1.00 = no zoom at all (bit-identical to the original SDK output). 1.18 pushes the typical
+     * Cardboard barrel window's top/bottom black bands off the screen while still leaving a small
+     * horizontal margin; raise it if your viewer/QR profile has wider bands. Pure post-process:
+     * no FOV, projection, geometry, shader or SDK C++ change, and both eyes stay fused.
+     */
+    val zoomScale: Float = 1.18f,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -148,6 +164,7 @@ data class VrSettings(
         ),
         ipdScale = ipdScale.coerceIn(VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX),
         screenFillMode = screenFillMode,
+        zoomScale = zoomScale.coerceIn(VrRanges.ZOOM_MIN, VrRanges.ZOOM_MAX),
     )
 
     companion object {

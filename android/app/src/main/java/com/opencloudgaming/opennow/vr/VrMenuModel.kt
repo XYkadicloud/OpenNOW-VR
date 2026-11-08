@@ -12,6 +12,7 @@ enum class VrMenuItemId {
     VERTICAL_OFFSET,
     IPD_SCALE,
     SCREEN_FILL_MODE,
+    ZOOM_SCALE,
     HORIZONTAL_MIRROR,
     VERTICAL_FLIP,
     // 观看
@@ -68,7 +69,7 @@ object VrMenuModel {
      * global index; [pageRanges] maps it back onto the second-level pages.
      */
     val items: List<VrMenuItem> = listOf(
-        // 画面 (0..8)
+        // 画面 (0..9)
         VrMenuItem(VrMenuItemId.SCREEN_SCALE, "串流窗口大小", VrMenuItemKind.RANGE,
             VrRanges.SCREEN_SCALE_MIN, VrRanges.SCREEN_SCALE_MAX, VrRanges.SCREEN_SCALE_STEP),
         VrMenuItem(VrMenuItemId.SCREEN_DISTANCE, "幕布距离 (m)", VrMenuItemKind.RANGE,
@@ -82,34 +83,36 @@ object VrMenuModel {
         VrMenuItem(VrMenuItemId.IPD_SCALE, "瞳距 / IPD", VrMenuItemKind.RANGE,
             VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX, VrRanges.IPD_SCALE_STEP),
         VrMenuItem(VrMenuItemId.SCREEN_FILL_MODE, "画面填充", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.ZOOM_SCALE, "整体放大", VrMenuItemKind.RANGE,
+            VrRanges.ZOOM_MIN, VrRanges.ZOOM_MAX, VrRanges.ZOOM_STEP),
         VrMenuItem(VrMenuItemId.HORIZONTAL_MIRROR, "串流左右镜像", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.VERTICAL_FLIP, "串流上下翻转", VrMenuItemKind.TOGGLE),
-        // 观看 (9..13)
+        // 观看 (10..14)
         VrMenuItem(VrMenuItemId.VIEWER_MODE, "视角模式", VrMenuItemKind.ENUM),
         VrMenuItem(VrMenuItemId.HEAD_TRACKING, "头部追踪", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.HEAD_SENSITIVITY, "追踪灵敏度", VrMenuItemKind.RANGE,
             VrRanges.HEAD_SENSITIVITY_MIN, VrRanges.HEAD_SENSITIVITY_MAX, VrRanges.HEAD_SENSITIVITY_STEP),
         VrMenuItem(VrMenuItemId.CENTER_ALIGN_LINE, "中心辅助线", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.RECENTER, "重置中心点", VrMenuItemKind.ACTION),
-        // 操作 (14..16)
+        // 操作 (15..17)
         VrMenuItem(VrMenuItemId.GAMEPAD_DEAD_ZONE, "手柄死区", VrMenuItemKind.RANGE,
             VrRanges.DEAD_ZONE_MIN, VrRanges.DEAD_ZONE_MAX, VrRanges.DEAD_ZONE_STEP),
         VrMenuItem(VrMenuItemId.MENU_REPEAT, "摇杆重复 (ms)", VrMenuItemKind.RANGE,
             VrRanges.REPEAT_MIN_MS.toFloat(), VrRanges.REPEAT_MAX_MS.toFloat(), VrRanges.REPEAT_STEP_MS.toFloat()),
         VrMenuItem(VrMenuItemId.SHOW_STATUS, "显示状态", VrMenuItemKind.TOGGLE),
-        // 环境 (17..18)
+        // 环境 (18..19)
         VrMenuItem(VrMenuItemId.BACKGROUND, "360° 背景图", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
             VrRanges.BACKGROUND_BRIGHTNESS_STEP),
-        // 快捷 (19..21)
+        // 快捷 (20..22)
         VrMenuItem(VrMenuItemId.SCAN_QR, "纸盒扫码校准", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.RESET_DEFAULTS, "恢复默认", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.EXIT_VR, "退出 VR", VrMenuItemKind.ACTION),
     )
 
     /** Index range of each page inside [items]. Verified at class-init so a bad split fails fast. */
-    private val pageRanges: List<IntRange> = listOf(0..8, 9..13, 14..16, 17..18, 19..21)
+    private val pageRanges: List<IntRange> = listOf(0..9, 10..14, 15..17, 18..19, 20..22)
 
     init {
         require(pageRanges.size == pages.size) { "page count mismatch" }
@@ -144,6 +147,7 @@ object VrMenuModel {
         VrMenuItemId.VERTICAL_OFFSET -> settings.screenVerticalOffset
         VrMenuItemId.IPD_SCALE -> settings.ipdScale
         VrMenuItemId.SCREEN_FILL_MODE -> if (settings.screenFillMode == VrScreenFillMode.FILL) 1f else 0f
+        VrMenuItemId.ZOOM_SCALE -> settings.zoomScale
         VrMenuItemId.VIEWER_MODE -> if (settings.viewerMode == VrViewerMode.CARDBOARD) 0f else 1f
         VrMenuItemId.HEAD_TRACKING -> if (settings.headTrackingEnabled) 1f else 0f
         VrMenuItemId.HEAD_SENSITIVITY -> settings.headTrackingSensitivity
@@ -166,10 +170,11 @@ object VrMenuModel {
         VrMenuItemId.VERTICAL_OFFSET -> String.format(Locale.US, "%+.1f m", settings.screenVerticalOffset)
         VrMenuItemId.IPD_SCALE -> String.format(Locale.US, "%.2f x", settings.ipdScale)
         VrMenuItemId.SCREEN_FILL_MODE -> if (settings.screenFillMode == VrScreenFillMode.FILL) {
-            "上下填满·方形"
+            "单纯放大·上下填满"
         } else {
             "原版（可回退）"
         }
+        VrMenuItemId.ZOOM_SCALE -> String.format(Locale.US, "%.2f x", settings.zoomScale)
         VrMenuItemId.VIEWER_MODE -> if (settings.viewerMode == VrViewerMode.CARDBOARD) "纸盒立体" else "裸眼单屏"
         VrMenuItemId.HEAD_TRACKING -> if (settings.headTrackingEnabled) "开" else "关"
         VrMenuItemId.HEAD_SENSITIVITY -> String.format(Locale.US, "%.1f", settings.headTrackingSensitivity)
@@ -270,6 +275,7 @@ object VrMenuModel {
         VrMenuItemId.CURVATURE -> settings.copy(curvature = value)
         VrMenuItemId.VERTICAL_OFFSET -> settings.copy(screenVerticalOffset = value)
         VrMenuItemId.IPD_SCALE -> settings.copy(ipdScale = value)
+        VrMenuItemId.ZOOM_SCALE -> settings.copy(zoomScale = value)
         VrMenuItemId.HEAD_SENSITIVITY -> settings.copy(headTrackingSensitivity = value)
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> settings.copy(gamepadDeadZone = value)
         VrMenuItemId.MENU_REPEAT -> settings.copy(menuRepeatMs = value.toLong())

@@ -16,7 +16,7 @@ sealed class VrCommand {
     object CloseMenu : VrCommand()
     object Confirm : VrCommand()
     data class MoveSelection(val delta: Int) : VrCommand()
-    /** D-pad LEFT/RIGHT switch the second-level settings PAGE (never change a value). */
+    /** LB / RB switch the second-level settings PAGE (never change a value). */
     data class ChangePage(val delta: Int) : VrCommand()
     /** Left stick only. VrSession gated by "A armed editing"; no D-pad ever emits this. */
     data class Adjust(val steps: Int) : VrCommand()
@@ -32,11 +32,12 @@ sealed class VrCommand {
  *    in game can never open it. Short presses pass straight through to the game unchanged. The
  *    hold timer starts on the initial ACTION_DOWN that completes the combination, NOT on the first
  *    OS key-repeat (see the note in onKey for why).
- *  - When the panel is open, D-pad UP/DOWN only SELECTS a row, D-pad LEFT/RIGHT only switches the
- *    second-level PAGE, A arms value editing / flips a switch, B closes the panel. NUMERIC VALUES
- *    are changed ONLY by the left analogue stick AND ONLY while A has armed editing (that gate is
- *    VrMenuModel.adjustIfEditing, enforced in VrSession). This is deliberate: it makes accidental
- *    slider drift impossible.
+ *  - When the panel is open, D-pad UP/DOWN only SELECTS a row, LB (L1) / RB (R1) switch the
+ *    second-level PAGE, A arms value editing / flips a switch, B closes the panel. D-pad
+ *    LEFT/RIGHT are deliberately inert (the user asked that paging NOT live on the D-pad).
+ *    NUMERIC VALUES are changed ONLY by the left analogue stick AND ONLY while A has armed
+ *    editing (that gate is VrMenuModel.adjustIfEditing, enforced in VrSession). This is
+ *    deliberate: it makes accidental slider drift impossible.
  *
  * No Android framework types are used here; VrKeys holds plain Int constants so JVM unit tests run
  * without Robolectric or mocked Android stubs.
@@ -79,7 +80,7 @@ class VrGamepadRouter {
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
 
         val alreadyDown = !pressed.add(keyCode)
-        // L1+R1 toggles VR. It is disabled while the menu is open (shoulders are swallowed there).
+        // L1+R1 toggles VR. Suppressed while the menu is open, where the same shoulders page it.
         if (!menuOpen && comboPressed()) {
             if (!comboFired) {
                 comboFired = true
@@ -164,8 +165,12 @@ class VrGamepadRouter {
     private fun menuKey(keyCode: Int): VrCommand = when (keyCode) {
         VrKeys.DPAD_UP -> VrCommand.MoveSelection(-1)
         VrKeys.DPAD_DOWN -> VrCommand.MoveSelection(1)
-        VrKeys.DPAD_LEFT -> VrCommand.ChangePage(-1)
-        VrKeys.DPAD_RIGHT -> VrCommand.ChangePage(1)
+        // LB / RB own page navigation. D-pad LEFT/RIGHT are intentionally swallowed: the user
+        // does not want paging on the D-pad, and leaving them as PassThrough would let the
+        // underlying 2D Compose UI steal focus with them.
+        VrKeys.PAGE_PREV_KEY -> VrCommand.ChangePage(-1)
+        VrKeys.PAGE_NEXT_KEY -> VrCommand.ChangePage(1)
+        VrKeys.DPAD_LEFT, VrKeys.DPAD_RIGHT -> VrCommand.Consumed
         VrKeys.BUTTON_A, VrKeys.DPAD_CENTER -> VrCommand.Confirm
         // B, SELECT, START and MODE all close the panel so a user without a B button is not trapped.
         VrKeys.BUTTON_B -> VrCommand.CloseMenu
@@ -195,8 +200,8 @@ class VrGamepadRouter {
 
         /**
          * Only UP/DOWN repeat while held (scrolling rows). A/B/SELECT must not, and neither may
-         * LEFT/RIGHT: those switch the second-level PAGE, and OS key-repeat would otherwise fling
-         * the user to the first/last category from a single held press.
+         * LB/RB: those switch the second-level PAGE, and OS key-repeat would otherwise fling the
+         * user to the first/last category from a single held press.
          */
         val REPEATABLE_MENU_KEYS = intArrayOf(
             VrKeys.DPAD_UP,

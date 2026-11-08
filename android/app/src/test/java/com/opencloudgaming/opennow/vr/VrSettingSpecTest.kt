@@ -81,6 +81,18 @@ class VrSettingSpecTest {
         }
     }
 
+    /** "单纯放大" must be exposed on the phone side too, with 1.00x as the exact no-op. */
+    @Test
+    fun zoomSliderExposesTheWholeRangeIncludingTheNoOp() {
+        val spec = VrSettingSpecs.byId("zoomScale")!!
+        assertEquals(VrRanges.ZOOM_MIN, spec.min, 0f)
+        assertEquals(VrRanges.ZOOM_MAX, spec.max, 0f)
+        assertEquals(VrRanges.ZOOM_STEP, spec.step, 0f)
+        assertEquals(VrRanges.ZOOM_MIN, spec.quantize(VrRanges.ZOOM_MIN), 1e-4f)
+        val noOp = spec.write(VrSettings.DEFAULT, VrRanges.ZOOM_MIN).sanitized()
+        assertEquals(VrRanges.ZOOM_MIN, spec.read(noOp), 1e-4f)
+    }
+
     @Test
     fun repeatIntervalConvertsBetweenFloatSliderAndLongSetting() {
         val spec = VrSettingSpecs.byId("menuRepeatMs")!!

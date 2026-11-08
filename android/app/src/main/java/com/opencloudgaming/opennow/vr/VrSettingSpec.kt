@@ -131,6 +131,16 @@ object VrSettingSpecs {
             write = { s, v -> s.copy(ipdScale = v) },
         ),
         VrSettingSpec(
+            id = "zoomScale",
+            label = "整体放大（上下填满）",
+            min = VrRanges.ZOOM_MIN,
+            max = VrRanges.ZOOM_MAX,
+            step = VrRanges.ZOOM_STEP,
+            unit = "x",
+            read = { it.zoomScale },
+            write = { s, v -> s.copy(zoomScale = v) },
+        ),
+        VrSettingSpec(
             id = "menuRepeatMs",
             label = "菜单连发间隔",
             min = VrRanges.REPEAT_MIN_MS.toFloat(),
