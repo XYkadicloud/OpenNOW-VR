@@ -259,19 +259,22 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 | **`42438601098`** | **`6cac3e3`** | **成功** | **历史版本；下面 ① 的 FILL 实现已被 `b109061` 整体废弃替换（见下一节技术说明）**，其余 ②③④⑤ 仍有效：① **上下填满 / 方形 / 去遮罩**（`VrScreenFillMode`，默认 `FILL`）：`onFinishFrame()` 在默认 framebuffer 上用 `onDrawEye()` 缓存的左右眼各自 MVP，把两只眼重画到 `(0,0,w/2,h)` / `(w/2,0,w/2,h)` 全高矩形 viewport，覆盖 Cardboard 的畸变合成；`DISTORTED` 一键回到原版。**仍是双目立体，不是单目直显**；不改 shader / SDK C++ / 零拷贝视频通路。② VR 菜单重做为 **5 个二级分类页 / 22 行现代化 UI**（渐变背景、圆角卡片、分类 chip、编辑中 banner、数值进度条、开关胶囊）。③ 交互改为：十字键 ↑↓ **只选择**、←→ **只换页**、数值**必须先按 `A` 进入编辑态**且**仅左摇杆**可调（左右 1 步 / 上下 5 步）、开关/枚举行按 `A` 立即切换。④ 删除右下角常驻「进入 VR」按钮，改为外部主页面顶栏原生按钮 + 串流 Quick Menu 项 + `L1+R1`。⑤ `screenFillMode` 全程可调：2D 设置页开关、VR 菜单 ENUM 行、SharedPreferences 持久化、恢复默认。同步改动 `VrMenuModel` / `VrGamepadRouter` / `VrSession` / `VrSettings` / `VrSettingsStore` / `VrSettingSpec` / `VrSettingsSection` / `VrModeHost` / `OpenNowScreens` / `OpenNowStreamControls` / `OpenNowStreamSurface` 及 4 个测试文件；建立 `snapshot-20261108-pre-refactor` tag、`backup/pre-fullscreen-refactor-20261108` 分支与 stash 作为回滚点。两 job 全绿（JVM 单测 + debug APK + AAR/APK JNI 守卫）。**全部画面效果与新手柄交互待真机复测** |
 | **`42444105242`** | **`b109061`** | **成功** | **当前版本**：① **「单纯放大」重做画面填充** —— 废弃上面的「方形 / 左右半屏重画」，改为保留 100% SDK 原版双目 + 桶形畸变，只在 `onFinishFrame()` 把最终合成图拷成纹理后做一次居中等比放大（`zoomScale` 默认 1.18x，1.00~2.00，步长 0.02），上下顶满、左右可留小黑边、双眼仍重叠；`glCopyTexSubImage2D` 失败时永久降级为原版而非黑屏。② **修 VR 菜单无法选行 / 换页**：取消 VR 开启时的 `isGamepadSource()` 门控（部分手柄报 `SOURCE_KEYBOARD`）。③ **修 B 误退出应用**：`KEYCODE_BACK` 整个 DOWN+UP 由 VR 层独占、只在 UP 动作。④ **输入隔离**：VR 开启时未消费按键 / motion 只转发给串流游戏并吞掉、跳过 hat 导航与 `super`，`dispatchTouchEvent` 吞掉所有触摸（合并进原有 override，未新增重复方法）。⑤ **LB / RB 换页**：`↑↓` 只选行、`←→` 置空、肩键换页且不连发；`L1+R1` 仍是 VR 开关但菜单内被抑制，并改为「组合仅在 0→1 边沿触发」，残留肩键及其 key-repeat 都不会误退出 VR。⑥ `zoomScale` 全链路可调（2D 滑块 / VR 菜单 RANGE 行 / 持久化 / 恢复默认），菜单 22→23 行、画面页 9→10 行、行高 30→27。⑦ 2D 设置页旧文案、README 与 `HANDOFF.md` §16 同步订正。两 job 全绿（AAR 构建 + JNI 守卫、JVM 单测 + debug APK）。**全部真机效果待复测** |
 | **`42445539466`** | **`a52e910`** | **成功** | **当前版本**：收紧 `L1+R1` 退出 VR 的触发条件为「组合从 0→1 的边沿」——`b109061` 的 `shoulderDown` 守卫只挡住了无关键，若关菜单时 LB+RB 仍按着，这对肩键**自身的 OS key-repeat** 仍会命中 `comboPressed()` 把用户踢出 VR。现在先记 `comboBefore` 再 `pressed.add()` 得到 `comboNow`，只有 `!comboBefore && comboNow && shoulderDown` 才发 `ToggleVrMode`，陈旧组合与其 repeat 一律吞为 `Consumed`；松开重新按仍正常退出。回归用例补了 shoulder repeat 与「松开后可正常退出」断言，本机 Python 复刻状态机 79 条断言全绿。两 job 全绿（AAR + JNI 守卫、JVM 单测 + debug APK）。**真机效果仍待复测** |
+| **`42448340812`** | **`d09f94f`** | **成功** | **当前版本**：① **修左摇杆不能选行** —— `VrGamepadRouter` 新增 `editing` 标志，未编辑态摇杆 ↑↓ 发 `MoveSelection`（旧版无论门控一律发 `Adjust`，被 `VrSession` 在未编辑态静默丢弃，真机就是「滑不动」），A 编辑态才 `Adjust`（↑↓ 5 步 / ←→ 1 步）；`VrSession.setEditMode()` 是唯一同步点。② **HAT 轴兼容**：蓝牙手柄把十字键报成 `AXIS_HAT_Y` 的事件新增 `onHat()` 边沿触发（按一次走一行、按住不连发），`resetAxisHold()` 只重置摇杆节流、保留 HAT 物理边沿，避免按 A 时仍按着的十字键多走一行。③ **退出方式收紧**：`ToggleVrMode` 只在 VR 关闭时执行，`L1+R1` 只负责进入；退出只剩手机系统返回键与 VR 菜单「快捷 → 退出 VR」按 A。④ **修「依然不能全屏」根因**：`b109061` 只分配 RGBA8 快照纹理，而多数手机给 Cardboard 的默认 framebuffer 是 RGB565，`glCopyTexSubImage2D` 直接 `GL_INVALID_OPERATION`，旧代码随即永久降级回原版 —— 放大根本没跑。现首帧依次探测 RGBA8 / RGB565 / RGB8，全失败退到 `glReadPixels` + `glTexSubImage2D`（32 MB 上限），只有全部失败才降级；任何失败都在 `glClear()` 前 return，绝不黑屏；surface 尺寸变化时重新分配纹理；菜单打开时跳过放大。⑤ `zoomScale` 默认 1.18→**1.35**、`ZOOM_MAX` 2.00→**2.50**，同步订正 `VrMenuModelTest` / `VrSettingsTest` 两处写死 `1.18f` 的必红断言。⑥ `README-VR.md §3` 重写为完整操作手册、`§4` 旧「进入 / 退出 VR」文案订正、`HANDOFF.md §17` 新增；2D 设置页两处文案与菜单 banner 同步更新。本机 Python 复刻状态机 37 条断言全绿。两 job 全绿（AAR + JNI 守卫、JVM 单测 + debug APK）。**全部真机效果待复测** |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；
 > 「进 VR 啥也没有」由 `9c9cbc7` 修复 `VrModeHost` 竞态解决，用户已确认 VR 场景能正常显示。
-> **当前剩余的是真机复测（`b109061`）**：① `LB/RB` 换页、`↑↓` 选行是否终于能操作（本轮最主要的
-> 验证点）；② 按 `B` 是否只关菜单 / 退出 VR 而**不再结束应用**；③ VR 开启后底层 2D 是否彻底
-> 不再响应按键 / 点击 / 摇杆焦点；④ `zoomScale` 从 `1.00x` 往上调，上下黑边是否按预期减少、
-> 双眼是否仍能重叠、放大后 VR 菜单四边是否被裁；⑤ `DISTORTED` 是否逐像素回到旧渲染；
-> ⑥ 菜单关闭时 `L1+R1` 仍能正常退出 VR；⑦ 若驱动不支持 `glCopyTexSubImage2D` 是否自动降级为
-> 原版画面而非黑屏。其余遗留项：基础 UI 是否正立、串流左右/上下朝向、辅助线是否固定在屏幕正中、
-> 瞳距调小/调大、重置中心点、`A` 编辑门控与摇杆手感、顶栏 / Quick Menu 三个入口、
+> **当前剩余的是真机复测（`d09f94f`）**：① 左摇杆上下（未按 `A`）能否顺畅选行、按住连选节奏是否合适；
+> ② 十字键若为 `AXIS_HAT_Y` 能否选行且不连发；③ 按 `A` 后摇杆是否只改数值、按 `B` 返回后
+> 是否立刻恢复选行；④ 退出：`L1+R1` 在 VR 内**不再退出**、手机返回键与菜单「快捷 → 退出 VR」
+> 两条是否都可用；⑤ **全屏**：`zoomScale = 1.35` 时上下黑边是否真的被顶掉；若仍有，继续上调到
+> 2.00~2.50；菜单打开时画面是否不裁切；驱动走 `glReadPixels` 兜底时是否流畅。若仍完全无变化，
+> 请确认 2D 设置页「画面上下填满（单纯放大）」开关是开着的、且「整体放大」滑块不在 `1.00x`
+> （`screenFillMode` 会被 SharedPreferences 记住，旧版本手动关过的话升级后仍是 `DISTORTED`）。
+> ⑥ `DISTORTED` 是否逐像素回到旧渲染。其余遗留项：基础 UI 是否正立、串流左右/上下朝向、
+> 辅助线是否固定在屏幕正中、瞳距调小/调大、重置中心点、顶栏 / Quick Menu 三个入口、
 > 长按 500 ms 与 key-repeat 可靠性、退出 VR 后方向与系统栏 flags 恢复。
-> 详见第 6 节与 `docs/HANDOFF.md` §13 / §14 / §16（§15 为已作废方案的历史记录）。
+> 详见第 6 节与 `docs/HANDOFF.md` §13 / §14 / §16 / §17（§15 为已作废方案的历史记录）。
 
 测试数量断言解析 `app/build/test-results/testDebugUnitTest/TEST-*.xml`，要求 `tests > 0`
 且 `failures/errors == 0`，否则 job 直接失败。完整记录见 `docs/VR_IMPLEMENTATION_PLAN.md` 第 9.1 节。

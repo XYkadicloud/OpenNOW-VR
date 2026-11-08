@@ -1189,6 +1189,10 @@ GLES2 的 `glCopyTexSubImage2D` 对格式不兼容的窗口缓冲拷贝返回 `G
 
 ### 17.7 待真机复测
 
+**CI**：GitHub Actions run `42448340812`（commit `d09f94f`）两 job 全绿 ——
+`build-cardboard-sdk-aar` 与 `vr-unit-tests-and-debug-apk` 均 `success`。
+提交前本机 Python 精确复刻状态机跑 37 条断言全绿，`git diff --check` 无空白错误。
+
 - 左摇杆上下（未按 A）能否顺畅选行、按住连选节奏是否合适；十字键若为 HAT 轴能否选行；
 - 按 `A` 后摇杆是否只改数值、`B` 返回后是否立刻恢复选行；
 - 退出：`L1+R1` 在 VR 内不再退出、手机返回键与菜单「退出 VR」两条是否都可用；
