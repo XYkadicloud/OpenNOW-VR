@@ -906,6 +906,50 @@ object NativeStreamInputRouter {
         return client?.dispatchMotion(event) == true
     }
 
+    /**
+     * VR-ONLY game input channel (real-device fix, 2026-11-08).
+     *
+     * While the Cardboard GL surface owns the screen, the 2D Quick Menu, keyboard IME and stream
+     * controls are INVISIBLE behind it. [dispatchKey] still contains several LOCAL branches that
+     * open those panels: the controller START hold, the configured keyboard shortcut, the Android
+     * TV Guide/MODE key, and the stream-controls shortcut. On pads whose Select / Home keys map to
+     * those codes, one ordinary in-game press silently opened the hidden 2D menu, which set
+     * streamUiActive=true. From then on [dispatchKey] returned false for EVERY key and
+     * [dispatchMotion] returned false for every stick — the game looked like it had lost input
+     * focus, and the panel could not be dismissed because it was hidden under the VR picture.
+     *
+     * These methods bypass ALL local UI/shortcut/streamUiActive branches: one physical key or
+     * motion event goes straight to the cloud game. VR still owns its own menu (VrSession consumes
+     * those events before MainActivity reaches this channel), so nothing here weakens the panel.
+     */
+    fun dispatchVrGameKey(event: KeyEvent): Boolean {
+        val current = client ?: return false
+        return current.dispatchKey(event)
+    }
+
+    fun dispatchVrGameMotion(event: MotionEvent): Boolean {
+        val current = client ?: return false
+        return current.dispatchMotion(event)
+    }
+
+    /**
+     * Explicitly hands input ownership back to the game. Called when VR opens and whenever the
+     * in-VR settings panel closes — the exact moment the real-device report said focus was lost.
+     * Cancels any pending "hold START to open the 2D menu" Runnable (it would otherwise fire
+     * later and steal focus again) and clears a stuck streamUiActive flag. No synthetic key is
+     * injected: the physical ACTION_UP still arrives through [dispatchVrGameKey].
+     */
+    fun restoreVrGameInput(reason: String) {
+        cancelControllerMenuHold(releaseForwardedStart = false)
+        if (streamUiActive) {
+            setStreamUiActive(false)
+            NativeInputDiagnostics.addRetained(
+                key = "vr.game-input.restored",
+                message = "VR input restored to game: streamUiActive=false reason=$reason",
+            )
+        }
+    }
+
     private fun KeyEvent.isStreamSystemMenuKey(): Boolean =
         shouldOpenStreamSystemMenuKey(
             keyCode = keyCode,

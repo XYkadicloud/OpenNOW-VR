@@ -117,6 +117,37 @@ class VrGamepadRouterTest {
     }
 
     /**
+     * Real-device regression (second device, 2026-11-08): "Select 和 Home 键无法正常被在游戏中使用".
+     * With VR on and the panel CLOSED, a short SELECT or MODE press MUST be PassThrough so
+     * MainActivity can forward it straight to the game via dispatchVrGameKey. The router reserves
+     * these keys only for the long-press menu trigger; it must never swallow the short press, and
+     * their OS key-repeats must stay pass-through too (the game owns the hold).
+     */
+    @Test
+    fun selectAndModeShortPressPassThroughToTheGameWhileVrPanelIsClosed() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true }
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 1000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_SELECT, 1100L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 2000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_MODE, 2100L))
+        // A lone SELECT hold never becomes the START+SELECT combo, so even its repeats pass through.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 3000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_SELECT, 3200L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_SELECT, 3300L))
+    }
+
+    /** Closing the panel must immediately make SELECT/MODE ordinary game keys again. */
+    @Test
+    fun selectAndModeBecomeGameKeysImmediatelyAfterPanelCloses() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true; it.menuOpen = true }
+        assertEquals(VrCommand.CloseMenu, press(r, VrKeys.BUTTON_SELECT))
+        assertEquals(VrCommand.Consumed, release(r, VrKeys.BUTTON_SELECT))
+        r.menuOpen = false // VrSession.setMenuOpen(false)
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_MODE, 5000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_MODE, 5100L))
+    }
+
+    /**
      * LB / RB are the second-level PAGE keys (user request). The L1+R1 VR toggle is suppressed
      * while the panel is open, so the same physical shoulders can safely own both roles.
      */

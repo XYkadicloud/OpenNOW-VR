@@ -60,6 +60,10 @@ class MainActivity : ComponentActivity() {
     private var streamSystemUiActive = false
     /** True while VR is on: forces landscape and hides status/navigation bars. */
     private var vrFullscreenActive = false
+    /** Tap-to-recenter gesture state while VR owns the screen (see handleVrTapRecenter). */
+    private var vrTapDownX = 0f
+    private var vrTapDownY = 0f
+    private var vrTapCancelled = false
     private var spaceUiSystemBarsHidden = false
     private var spaceUiAppearanceActive = false
     private var defaultLightStatusBars = false
@@ -136,8 +140,17 @@ class MainActivity : ComponentActivity() {
         // setZOrderOnTop(true), so no 2D View can cover it: hiding the system bars is the only way
         // to remove the status/navigation bar from the VR picture. Both are restored on VR exit.
         lifecycleScope.launch {
-            VrSession.enabled.collect { active -> applyVrFullscreen(active) }
+            VrSession.enabled.collect { active ->
+                applyVrFullscreen(active)
+                // Entering VR must start from a clean game-input state: a 2D Quick Menu left open
+                // (or a pending "hold START" timer) would keep streamUiActive=true and starve the
+                // game of every key from the very first frame.
+                if (active) NativeStreamInputRouter.restoreVrGameInput("vr-entered")
+            }
         }
+        // Closing the in-VR settings panel explicitly hands input focus back to the game.
+        // The lambda only references a global object, so it never retains this Activity.
+        VrSession.onVrMenuClosed = { NativeStreamInputRouter.restoreVrGameInput("vr-panel-closed") }
         lifecycleScope.launch {
             openNowApplication.awaitStartupData()
             startupDataReady = true
@@ -273,6 +286,18 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         mascotActivity.onKey(event)
+        // Many Bluetooth pads map Select/Back to KEYCODE_BACK. That is an ORDINARY GAME KEY, not
+        // the phone's system back key: VrSession.onKeyEvent would otherwise swallow it and even
+        // exit VR on ACTION_UP. Real-device report (second device): "Select 和 Home 键无法正常被
+        // 在游戏中使用". Only a NON-controller BACK keeps the deliberate "back exits VR" behaviour.
+        if (VrSession.enabled.value &&
+            !VrSession.menuOpen.value &&
+            event.keyCode == KeyEvent.KEYCODE_BACK &&
+            AndroidControllerInput.isControllerEvent(event.source, event.deviceId)
+        ) {
+            NativeStreamInputRouter.dispatchVrGameKey(event)
+            return true
+        }
         // OpenNOW-VR: the VR layer gets first refusal. It owns the whole BACK/B down+up sequence,
         // the in-VR settings panel, LB/RB paging and the L1+R1 toggle (see VrSession.onKeyEvent).
         if (VrSession.onKeyEvent(event)) return true
@@ -283,7 +308,11 @@ class MainActivity : ComponentActivity() {
             // START pops the Quick Menu and BACK/B finishes the Activity. Volume keys are the one
             // exception (system behaviour).
             if (event.isAndroidVolumeKey()) return super.dispatchKeyEvent(event)
-            NativeStreamInputRouter.dispatchKey(event)
+            // VR GAME PASSTHROUGH: bypass every local menu/shortcut/streamUiActive branch of
+            // dispatchKey(). Those branches open the INVISIBLE 2D Quick Menu on some pads, which
+            // sets streamUiActive=true and silently starves the game of all later input — the
+            // "关闭设置页后输入焦点回不到游戏" report. The VR menu itself is already consumed above.
+            NativeStreamInputRouter.dispatchVrGameKey(event)
             return true
         }
         if (streamSystemUiActive && event.action == KeyEvent.ACTION_DOWN && event.shouldReapplyStreamSystemUi()) {
@@ -369,7 +398,9 @@ class MainActivity : ComponentActivity() {
         if (VrSession.onMotionEvent(event)) return true
         if (VrSession.enabled.value) {
             // No hat/DPAD navigation of the hidden 2D Compose UI while the headset view is up.
-            NativeStreamInputRouter.dispatchMotion(event)
+            // Same VR game passthrough as dispatchKeyEvent: a stuck streamUiActive must not stop
+            // stick / mouse motion from reaching the game once the settings panel is closed.
+            NativeStreamInputRouter.dispatchVrGameMotion(event)
             return true
         }
         val mouseLikePointer = event.isMouseLikePointerEvent()
@@ -456,7 +487,10 @@ class MainActivity : ComponentActivity() {
         // open a dialog / toggle a control that is completely invisible under the VR picture.
         // Swallow the whole gesture BEFORE the original stream touch router and before super;
         // with VR off everything below keeps its original behaviour, untouched.
-        if (VrSession.enabled.value) return true
+        if (VrSession.enabled.value) {
+            handleVrTapRecenter(event)
+            return true
+        }
         try {
             val decorView = window?.decorView
             if (streamSystemUiActive && event.isMouseLikePointerEvent()) {
@@ -497,6 +531,41 @@ class MainActivity : ComponentActivity() {
             }
         } finally {
             NativeStreamInputRouter.postDispatchTouch(event)
+        }
+    }
+
+    /**
+     * A short tap anywhere on the screen resets the head-tracking centre while VR owns the
+     * display ("点击屏幕自动重新修正中心点 / 重置视角"). The gesture is STILL fully swallowed so
+     * the invisible 2D UI behind the headset never receives it. Only a deliberate tap (short,
+     * almost no movement) triggers [VrSession.recenter]; sliding the phone or adjusting the
+     * headset must not silently rotate the view.
+     */
+    private fun handleVrTapRecenter(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                vrTapDownX = event.x
+                vrTapDownY = event.y
+                vrTapCancelled = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (kotlin.math.abs(event.x - vrTapDownX) > VR_TAP_SLOP_PX ||
+                    kotlin.math.abs(event.y - vrTapDownY) > VR_TAP_SLOP_PX
+                ) {
+                    vrTapCancelled = true
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!vrTapCancelled &&
+                    event.eventTime - event.downTime <= VR_TAP_TIMEOUT_MS &&
+                    kotlin.math.abs(event.x - vrTapDownX) <= VR_TAP_SLOP_PX &&
+                    kotlin.math.abs(event.y - vrTapDownY) <= VR_TAP_SLOP_PX
+                ) {
+                    VrSession.recenter()
+                }
+                vrTapCancelled = false
+            }
+            MotionEvent.ACTION_CANCEL -> vrTapCancelled = false
         }
     }
 
@@ -912,6 +981,9 @@ class MainActivity : ComponentActivity() {
         private const val MAIN_ACTIVITY_LOG_TAG = "OpenNOWMainActivity"
         private const val STREAM_SYSTEM_UI_ENFORCE_INTERVAL_MS = 500L
         private const val STREAM_SYSTEM_UI_INPUT_REAPPLY_MS = 250L
+        /** A VR tap-to-recenter must be short and nearly stationary (dp-independent pixel slop). */
+        private const val VR_TAP_SLOP_PX = 24f
+        private const val VR_TAP_TIMEOUT_MS = 400L
         private const val MIN_PIP_ASPECT_RATIO = 1f / 2.39f
         private const val MAX_PIP_ASPECT_RATIO = 2.39f
     }

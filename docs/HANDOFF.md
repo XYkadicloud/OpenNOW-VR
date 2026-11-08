@@ -1276,3 +1276,122 @@ SDK C++，也不要退回「左右眼各重画半屏矩形」的 `6cac3e3` 方�
 代码提交后重新导出 `OpenNOW-VR-modules-20261108-r3.zip`（r2 会随代码变更过期）。
 包内 `00_先看这个.txt` / `MANIFEST.txt` / `01_模块与设置总表.md` 同步更新提交号与 CI 号。
 
+## 19. 第二轮另一台设备真机反馈：Select/Home 键、菜单关闭后焦点、点击屏幕重置视角
+
+### 19.1 三条诉求
+
+1. 「在另一台设备中测试下 Select 和 Home 键……不能够正常被在游戏中使用」；
+2. 「在那台设备中测试下发现到在关闭设置页时，无法正常地将输入焦点对焦至游戏」；
+3. 「点击屏幕自动的，重新修正，中心点重置视角」。
+
+前两条**是同一个根因**，不是两个独立 bug；第三条是独立的新交互。
+
+### 19.2 根因：VR 把未消费按键交给了带「本地菜单」分支的 dispatchKey()
+
+`MainActivity.dispatchKeyEvent()` 在 VR enabled 时原本是：
+
+```kotlin
+if (VrSession.onKeyEvent(event)) return true
+if (VrSession.enabled.value) {
+    ...
+    NativeStreamInputRouter.dispatchKey(event)   // ← 问题在这里
+    return true
+}
+```
+
+`NativeStreamInputRouter.dispatchKey()` **不是纯转发**，内部有多条本地 UI 分支：
+
+- `KEYCODE_BUTTON_START` → `shouldTrackControllerStartHold()` → `postDelayed` 长按后
+  `openMenu()` + `setStreamUiActive(true)`；
+- `isStreamSystemMenuKey()` → `systemMenuHandler?.invoke()` → `openControls("input-shortcut")`
+  → `setStreamUiActive(true)`；
+- `isStreamControlsShortcutKey()` → 同上；
+- `if (streamUiActive) return false`：之后**每一个**按键都不再发给游戏；
+- `dispatchMotion()` 在 `streamUiActive` 时同样 `return false`，摇杆也断。
+
+`OpenNowStreamSurface.kt` 的 `LaunchedEffect(streamReady, streamOverlayOpen, ...)` 把
+`setStreamUiActive(streamReady && streamOverlayOpen)` 与 2D `controlsOpen` 绑定。
+于是某些设备（键码映射 / Android TV profile 不同）把 `Select` / `Home` 映射到上述
+「打开菜单」键码时，一次普通的游戏内按键就会：
+
+> 打开**不可见**的 2D Quick Menu → `controlsOpen=true` → `streamUiActive=true` →
+> 游戏收不到任何后续 key / motion → 因为 2D 菜单被 `setZOrderOnTop(true)` 的 VR GL
+> SurfaceView 完全遮住，用户在头显里根本无法关掉它 → 表现为「输入焦点再也回不到游戏」。
+
+这也解释了更早那条反馈「后面的 2D 原本应用内容仍会被手柄操控，Start 键或点到后面画布
+可能突然弹出窗口」：`b109061` 的输入隔离只挡住了 Compose，**没有挡住 `dispatchKey()`
+内部的本地菜单分支**。
+
+另外，不少蓝牙手柄把 `Select` / `Back` 直接映射成 `KEYCODE_BACK`(4)，而
+`VrSession.onKeyEvent()` 对 `KEYCODE_BACK` 是**无条件**吞掉、并在 `ACTION_UP` 执行
+`setEnabled(false)`。所以那台设备上按 Select 不只是「没反应」，还会退出 VR。
+
+### 19.3 本轮实际改动（4 个文件）
+
+`StreamInputRouting.kt`（`object NativeStreamInputRouter`）新增 3 个 public 方法：
+
+| 方法 | 作用 |
+| --- | --- |
+| `dispatchVrGameKey(event)` | 直接 `client?.dispatchKey(event)`，绕过全部本地菜单 / 快捷键 / `streamUiActive` 分支 |
+| `dispatchVrGameMotion(event)` | 直接 `client?.dispatchMotion(event)`，摇杆 / 鼠标不受卡住的 `streamUiActive` 影响 |
+| `restoreVrGameInput(reason)` | `cancelControllerMenuHold(false)` + 若 `streamUiActive` 则 `setStreamUiActive(false)`；不注入合成 UP |
+
+`MainActivity.kt`：
+
+1. `dispatchKeyEvent()` 前置一条**来源判定**：VR enabled、菜单关闭、`KEYCODE_BACK`
+   且 `AndroidControllerInput.isControllerEvent(source, deviceId)` 为真 → 直接
+   `dispatchVrGameKey()` 并返回 true。手机系统返回键（非手柄来源）不受影响，
+   仍按用户偏好保留「返回键退出 VR」。
+2. VR 分支 `dispatchKey(event)` → `dispatchVrGameKey(event)`；
+   `dispatchGenericMotionEvent()` 的 `dispatchMotion(event)` → `dispatchVrGameMotion(event)`。
+3. `onCreate` 绑定 `VrSession.onVrMenuClosed = { restoreVrGameInput("vr-panel-closed") }`，
+   并在 `VrSession.enabled.collect { active -> ... }` 里 `active==true` 时也复位一次
+   （`"vr-entered"`）。
+4. `dispatchTouchEvent()` 的 VR 分支在吞掉手势**之前**调用 `handleVrTapRecenter(event)`：
+   记录 `ACTION_DOWN` 坐标，`ACTION_MOVE` 超过 `VR_TAP_SLOP_PX=24f` 标记取消，
+   `ACTION_UP` 且 `eventTime - downTime <= VR_TAP_TIMEOUT_MS=400L`、位移在阈值内 →
+   `VrSession.recenter()`；`ACTION_CANCEL` 复位。滑动 / 长按 / 取消均不触发。
+
+`VrSession.kt`：新增 `@Volatile var onVrMenuClosed: (() -> Unit)?`；
+`setMenuOpen(false)` 只在 `wasOpen && _enabled.value` 的**开→关边沿**触发一次。
+`setEnabled(false)` 会先置 `_enabled=false` 再调 `setMenuOpen(false)`，所以
+**正常退出 VR 不会触发**，不会干扰 2D UI 恢复。
+
+`VrGamepadRouterTest.kt`：新增 2 个回归用例，锁定
+「VR on + 菜单关闭时 SELECT / MODE 短按（含 OS repeat）必须 `PassThrough`」与
+「关菜单后立刻变回普通游戏键」；`VrGamepadRouter` 本身**没有改动**。
+
+### 19.4 刻意没动的部分
+
+- `VrGamepadRouter` 状态机、长按 500 ms 开菜单、LB/RB 换页、A 门控、HAT 兼容：全部保持；
+- `VrSession.onKeyEvent()` 对**非手柄** `KEYCODE_BACK` 的退出逻辑：保持（用户明确偏好）；
+- VR 菜单打开时输入独占、2D Compose 按键 / 触摸 / 摇杆隔离：保持；
+- 音量键仍走 `super.dispatchKeyEvent(event)`；
+- `screenFillMode` / `zoomScale` / 三格式快照探测 / 辅助线 / 360° 背景 / IPD：全部不动；
+- 设置项仍是 20 个、菜单 5 页 23 行。点击屏幕重置中心点**没有**新增可调项
+  （用户未要求；若后续要加开关，走 `VrSettings` → `VrSettingSpecs` → `VrMenuModel` 链路）。
+
+### 19.5 验证
+
+- 本机 Python 精确复刻 `VrGamepadRouter.onKey` / `VrSession.setMenuOpen` /
+  `handleVrTapRecenter`：**36 条断言全绿**（含长按仍触发、LB/RB 换页、VR 退出不触发
+  回调、拖动 / 长按 / CANCEL 不 recenter）。
+- `git diff --check` 无空白错误。
+- GitHub Actions 两 job 全绿（`build-cardboard-sdk-aar` + `vr-unit-tests-and-debug-apk`），
+  run 号见 `README-VR.md §5.1`。
+
+### 19.6 待真机复测（那台设备）
+
+1. 菜单关闭时，游戏中按 `Select` / `Home`（含把 Select 映射成 BACK 的手柄）应正常生效，
+   且**不会退出 VR**；
+2. 长按 `START+SELECT` / `HOME/MODE` 仍能开菜单；菜单里 `SELECT` / `MODE` 仍能关菜单；
+3. 打开 → 关闭 VR 设置菜单后，立刻按任意游戏键 / 推摇杆，游戏应马上收到；
+   `adb logcat` 若出现 `VR input restored to game: streamUiActive=false` 说明复位生效；
+4. VR 期间短按屏幕 → 视角立刻摆正；拖动 / 长按不应改变视角；
+5. 手机系统返回键仍能退出 VR（不被来源判定误伤）。
+
+### 19.7 交付物状态
+
+`OpenNOW-VR-modules-20261108-r3.zip` 已随本轮代码变更**过期**；本轮未重新导出
+（用户未要求），如需再导出应以本轮提交为基准生成 r4。
+

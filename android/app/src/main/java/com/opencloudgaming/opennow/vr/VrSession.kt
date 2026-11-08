@@ -56,6 +56,15 @@ object VrSession {
     /** Set by VrModeHost so the VR menu can trigger head-tracking recenter. */
     @Volatile var onRecenter: (() -> Unit)? = null
 
+    /**
+     * Set by MainActivity. Fired on the OPEN -> CLOSED edge of the in-VR settings panel so the
+     * host can hand input ownership back to the stream game (cancel a pending 2D menu hold and
+     * clear a stuck streamUiActive). Real-device report: "关闭设置页时，无法正常地将输入焦点对焦
+     * 至游戏". Deliberately NOT fired when VR itself is switched off — setEnabled(false) already
+     * runs the full reset path and _enabled is false by then.
+     */
+    @Volatile var onVrMenuClosed: (() -> Unit)? = null
+
     private var store: VrSettingsStore? = null
     private val router = VrGamepadRouter()
 
@@ -85,9 +94,15 @@ object VrSession {
     }
 
     fun setMenuOpen(value: Boolean) {
+        val wasOpen = _menuOpen.value
         _menuOpen.value = value
         router.menuOpen = value
-        if (!value) setEditMode(false)
+        if (!value) {
+            setEditMode(false)
+            // Only the in-VR "panel closed" edge. setEnabled(false) flips _enabled first, so an
+            // ordinary VR exit does NOT fire this and cannot disturb the restored 2D UI state.
+            if (wasOpen && _enabled.value) onVrMenuClosed?.invoke()
+        }
     }
 
     /** Switches the second-level page and lands selection on its first row. */
