@@ -1326,7 +1326,7 @@ if (VrSession.enabled.value) {
 `VrSession.onKeyEvent()` 对 `KEYCODE_BACK` 是**无条件**吞掉、并在 `ACTION_UP` 执行
 `setEnabled(false)`。所以那台设备上按 Select 不只是「没反应」，还会退出 VR。
 
-### 19.3 本轮实际改动（4 个文件）
+### 19.3 本轮实际改动（4 个源码 / 测试文件 + 2 份文档）
 
 `StreamInputRouting.kt`（`object NativeStreamInputRouter`）新增 3 个 public 方法：
 
@@ -1377,8 +1377,8 @@ if (VrSession.enabled.value) {
   `handleVrTapRecenter`：**36 条断言全绿**（含长按仍触发、LB/RB 换页、VR 退出不触发
   回调、拖动 / 长按 / CANCEL 不 recenter）。
 - `git diff --check` 无空白错误。
-- GitHub Actions 两 job 全绿（`build-cardboard-sdk-aar` + `vr-unit-tests-and-debug-apk`），
-  run 号见 `README-VR.md §5.1`。
+- GitHub Actions run `42460189808` 两 job 全绿（`build-cardboard-sdk-aar` 与
+  `vr-unit-tests-and-debug-apk` 均 `success`），记录见 `README-VR.md §5.1`。
 
 ### 19.6 待真机复测（那台设备）
 
@@ -1392,6 +1392,8 @@ if (VrSession.enabled.value) {
 
 ### 19.7 交付物状态
 
-`OpenNOW-VR-modules-20261108-r3.zip` 已随本轮代码变更**过期**；本轮未重新导出
-（用户未要求），如需再导出应以本轮提交为基准生成 r4。
+以本轮提交为基准重新导出 `OpenNOW-VR-modules-20261108-r4.zip`（第 4 次导出）：
+覆盖本轮 6 个变动文件，并**首次补入 `src/integration/StreamInputRouting.kt`**
+（本轮新增 VR 游戏直通通道的所在文件；r2/r3 打包时它还不是 VR 相关代码，故遗漏）。
+包内源码 / 配置 / 文档共 42 个文件、设置项仍为 20 个、菜单 5 页 23 行。
 
