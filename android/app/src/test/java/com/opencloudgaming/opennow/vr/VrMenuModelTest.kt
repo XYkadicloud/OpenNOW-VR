@@ -317,9 +317,14 @@ class VrMenuModelTest {
         assertEquals(VrPassthroughResolution.P720, cycled.passthroughResolution)
         assertEquals(VrPassthroughFrameRate.FPS_60,
             VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FPS).passthroughFrameRate)
+        // Three tiers: 30 -> 60 -> 15 -> 30. 15 fps was added on user request as a low-power tier.
+        assertEquals(VrPassthroughFrameRate.FPS_15, cycleFps(s, 2).passthroughFrameRate)
+        assertEquals(VrPassthroughFrameRate.FPS_30, cycleFps(s, 3).passthroughFrameRate)
+        assertEquals(VrPassthroughFrameRate.FPS_60, cycleFps(s, 4).passthroughFrameRate)
+        // The lowest tier is not a dead end: 15 -> 30.
         assertEquals(VrPassthroughFrameRate.FPS_30,
             VrMenuModel.activate(
-                VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FPS),
+                VrSettings(passthroughFrameRate = VrPassthroughFrameRate.FPS_15),
                 VrMenuItemId.PASSTHROUGH_FPS,
             ).passthroughFrameRate)
         val allRotations = VrPassthroughRotation.values().size
@@ -392,5 +397,11 @@ class VrMenuModelTest {
             VrPassthroughAspect.SIXTEEN_NINE,
             VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_ASPECT).passthroughAspect,
         )
+    }
+
+    private fun cycleFps(s: VrSettings, times: Int): VrSettings {
+        var current = s
+        repeat(times) { current = VrMenuModel.activate(current, VrMenuItemId.PASSTHROUGH_FPS) }
+        return current
     }
 }

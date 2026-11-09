@@ -203,7 +203,9 @@ object VrMenuModel {
         VrMenuItemId.PASSTHROUGH_RESOLUTION ->
             settings.passthroughResolution.ordinal.toFloat() /
                 (VrPassthroughResolution.values().size - 1).toFloat()
-        VrMenuItemId.PASSTHROUGH_FPS -> settings.passthroughFrameRate.ordinal.toFloat()
+        VrMenuItemId.PASSTHROUGH_FPS ->
+            settings.passthroughFrameRate.ordinal.toFloat() /
+                (VrPassthroughFrameRate.values().size - 1).toFloat()
         VrMenuItemId.PASSTHROUGH_ROTATION ->
             settings.passthroughRotation.ordinal.toFloat() /
                 (VrPassthroughRotation.values().size - 1).toFloat()
@@ -258,6 +260,7 @@ object VrMenuModel {
             VrPassthroughResolution.P1080 -> "1080P"
         }
         VrMenuItemId.PASSTHROUGH_FPS -> when (settings.passthroughFrameRate) {
+            VrPassthroughFrameRate.FPS_15 -> "15 帧（省电）"
             VrPassthroughFrameRate.FPS_30 -> "30 帧（默认）"
             VrPassthroughFrameRate.FPS_60 -> "60 帧"
         }
@@ -387,11 +390,9 @@ object VrMenuModel {
             ],
         )
         VrMenuItemId.PASSTHROUGH_FPS -> settings.copy(
-            passthroughFrameRate = if (settings.passthroughFrameRate == VrPassthroughFrameRate.FPS_30) {
-                VrPassthroughFrameRate.FPS_60
-            } else {
-                VrPassthroughFrameRate.FPS_30
-            },
+            passthroughFrameRate = VrPassthroughFrameRate.values()[
+                (settings.passthroughFrameRate.ordinal + 1) % VrPassthroughFrameRate.values().size
+            ],
         )
         VrMenuItemId.PASSTHROUGH_ROTATION -> settings.copy(
             passthroughRotation = VrPassthroughRotation.values()[

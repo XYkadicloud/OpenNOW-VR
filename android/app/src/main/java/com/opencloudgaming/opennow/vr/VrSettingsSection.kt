@@ -238,22 +238,22 @@ fun VrSettingsSection() {
         )
 
         val fpsLabel = when (settings.passthroughFrameRate) {
+            VrPassthroughFrameRate.FPS_15 -> "15 帧（省电）"
             VrPassthroughFrameRate.FPS_30 -> "30 帧（默认）"
             VrPassthroughFrameRate.FPS_60 -> "60 帧"
         }
         TextButton(onClick = {
-            val next = if (settings.passthroughFrameRate == VrPassthroughFrameRate.FPS_30) {
-                VrPassthroughFrameRate.FPS_60
-            } else {
-                VrPassthroughFrameRate.FPS_30
-            }
+            val all = VrPassthroughFrameRate.values()
+            val next = all[(settings.passthroughFrameRate.ordinal + 1) % all.size]
             VrSession.updateSettings(settings.copy(passthroughFrameRate = next))
         }) {
             Text("透视帧率：$fpsLabel（点击切换）")
         }
         Text(
-            "写入 Camera2 的自动曝光 FPS 区间。若设备只支持 30 帧，选 60 帧会自动回落到 30，" +
-                "不会黑屏；状态面板会显示实际生效的帧率。其他机型可以开 60 帧。",
+            "写入 Camera2 的自动曝光 FPS 区间，三档循环：15 帧省电（透视只作粗略环境参考时最省）、" +
+                "30 帧默认、60 帧给支持的机型。设备达不到所选档位时自动回落到最接近的稳定区间，" +
+                "不会黑屏；同类上限相同时优先固定区间（如 [30,30] 而非 [15,30]），避免低光掉帧。" +
+                "状态面板显示的是实际生效帧率，不是你选的档位。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
@@ -336,7 +336,7 @@ fun VrSettingsSection() {
                 "这是纯最终画面后处理，不改 FOV / 投影 / 几何 / shader，双眼始终保持原来的重叠关系；打开 VR 设置菜单时会自动暂停放大，菜单不会被裁。" +
                 "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。" +
                 "「摄像头透视」是单目实时画面，不是 360° 环境：它以固定窗口显示在正前方（窗口大小、可见度、4:3 / 16:9 比例、" +
-                "360P / 480P / 720P / 1080P 分辨率、30 / 60 帧、0° / 90° / 180° / 270° 旋转、额外镜像都可调），" +
+                "360P / 480P / 720P / 1080P 分辨率、15 / 30 / 60 帧、0° / 90° / 180° / 270° 旋转、额外镜像都可调），" +
                 "默认 4:3 + 480P + 30 帧。窗口按设备真实预览尺寸同比例构建，不拉伸；方向不对用「透视画面旋转」拨正。" +
                 "窗口外保持纯黑，串流画面始终在最上层。窗口随头锁定是因为手机与摄像头一起转，这样才是物理正确的，" +
                 "但左右眼仍有正确视差，看起来像正前方开了一扇窗。",

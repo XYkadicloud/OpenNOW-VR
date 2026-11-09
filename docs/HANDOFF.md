@@ -1586,7 +1586,7 @@ onRendererShutdown: ptCamera.stop() → release() → releasePassthroughTexture(
 
 | 文件 | 改动 |
 | --- | --- |
-| `VrSettings.kt` | 新增 `VrPassthroughResolution{P360,P480,P720,P1080}`、`VrPassthroughFrameRate{FPS_30,FPS_60}`、`VrPassthroughRotation{AUTO,R0,R90,R180,R270}` 三个枚举；新增 `passthroughResolution / passthroughFrameRate / passthroughRotation / passthroughMirror / passthroughHeadLocked` 五个字段并纳入 `sanitized()`。设置项 26 → **31** |
+| `VrSettings.kt` | 新增 `VrPassthroughResolution{P360,P480,P720,P1080}`、`VrPassthroughFrameRate{FPS_15,FPS_30,FPS_60}`、`VrPassthroughRotation{AUTO,R0,R90,R180,R270}` 三个枚举；新增 `passthroughResolution / passthroughFrameRate / passthroughRotation / passthroughMirror / passthroughHeadLocked` 五个字段并纳入 `sanitized()`。设置项 26 → **31**（帧率在用户追加要求后由 2 档扩为 3 档，见 §21.10） |
 | `VrSettingsStore.kt` | 5 个新 key 的读写 + 默认值回退，全部走 `runCatching { valueOf(...) }` |
 | `VrMenuModel.kt` | 5 个新行；菜单 29 → **34 行**，环境页 `18..30`（13 行）、快捷页 `31..33`；`rawValue / display / activate / toggle` 全链路覆盖，`display()` 仍是穷尽 when |
 | `VrSettingSpec.kt` | 未改（新字段是枚举 / 开关，不是数字滑块） |
@@ -1644,7 +1644,8 @@ VrSettings (档位)
 3. 竖直线条（窗格 / 灯带）是否仍是竖直且不被压扁；窗格长宽比与现实是否一致；
 4. 转头时窗口与游戏幕布是否一起移动、无相对滑动；`passthroughHeadLocked` 开 / 关对比；
 5. 依次切 `360P / 480P / 720P / 1080P`，确认状态面板实际尺寸变化、无拉伸、无黑屏；
-6. 30 / 60 帧切换：30 帧手机选 60 应显示实际 30 而不是黑屏或掉帧；
+6. `15 / 30 / 60` 三帧档切换：30 帧手机选 60 应显示实际 30 而不是黑屏或掉帧；选 15 应显示
+   实际 15（或设备支持的最近稳定区间），确认低帧档确实更省电、画面仍能看清周围；
 7. 前后置摄像头、额外镜像、三种布局、相机被占用降级、反复进出 VR 是否泄漏。
 
 ### 21.9 §20.9 技术债处置结论
@@ -1657,4 +1658,26 @@ VrSettings (档位)
 - 「三种布局用 head-locked、`OVERLAY` 用随头转」→ **不再是设计选择**：默认统一为幕布的基础
   MVP，只有显式 `passthroughHeadLocked = true` 才回退旧行为。
 - `triggerHoldConsumed` 的松开事件依赖仍是遗留项，本轮未动。
+
+### 21.10 追加要求：15 帧档（同一轮内）
+
+用户在实现过程中追加「顺便加15帧的模式」。因 CI 刚被 `38378f6` 触发，先尝试取消该 run
+（API 返回 409，说明已进入不可取消状态；它跑完只作为改动前基线，不作为交付依据），
+随后把帧率从 2 档扩为 3 档：
+
+- `VrPassthroughFrameRate` → `{ FPS_15(15), FPS_30(30), FPS_60(60) }`，按低→高排序，
+  **默认仍是 `FPS_30`**，持久化 key `passthroughFrameRate` 不变、旧值 `FPS_30` / `FPS_60`
+  仍能被 `valueOf` 正确读回。
+- `VrMenuModel`：`rawValue` 改为按 `values().size - 1` 归一化；`display` 加「15 帧（省电）」；
+  `toggle` 从二值 if/else 改为通用 `values()` 循环（30 → 60 → 15 → 30）。
+- `VrSettingsSection`：2D 按钮同样改通用循环，说明文案补 15 帧用途与「状态面板显示的是实际
+  生效帧率，不是所选档位」。
+- `VrPassthroughCamera.chooseFpsRange()` 无需改动：`target = 15` 时会在
+  `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES` 中选 `upper <= 15` 且 `lower` 最大的区间，
+  自然支持低帧档；达不到时回落到最慢稳定区间并在状态面板回报实际值。
+- 测试：`VrMenuModelTest` 改为 3 档循环断言（含最低档不是死路）、`cycleFps` helper；
+  `VrSettingsTest` 加 `FPS_15.fps == 15`、枚举 3 项、15 帧 survives sanitize。
+- 文档：README §3.8 帧率行 / §4 设置行 / §3.8 真机修复第 4 条，HANDOFF §21.4 / §21.8。
+
+帧率档位数量变化不影响设置项总数（仍是 31 个）与菜单行数（仍是 34 行）。
 

@@ -78,8 +78,14 @@ enum class VrPassthroughMode { OVERLAY, CAMERA_MAIN, SIDE_BY_SIDE }
  */
 enum class VrPassthroughResolution(val shortEdge: Int) { P360(360), P480(480), P720(720), P1080(1080) }
 
-/** Target preview frame rate. FPS_30 is the default; FPS_60 is for phones whose AE ranges allow it. */
-enum class VrPassthroughFrameRate(val fps: Int) { FPS_30(30), FPS_60(60) }
+/**
+ * Target preview frame rate. FPS_30 is the default. FPS_15 is a low-power / low-light tier for
+ * weak phones or when passthrough only needs to be a rough "see the room" guide; FPS_60 is for
+ * phones whose AE ranges allow it. Values are ordered low -> high so the menu / settings button
+ * cycles in a natural direction. A device that cannot honour a tier silently falls back to the
+ * closest supported AE range and the EFFECTIVE fps is shown in the VR status panel.
+ */
+enum class VrPassthroughFrameRate(val fps: Int) { FPS_15(15), FPS_30(30), FPS_60(60) }
 
 /**
  * Clockwise rotation applied to the camera preview so it reads upright in the VR window.
@@ -265,7 +271,7 @@ data class VrSettings(
     val passthroughMode: VrPassthroughMode = VrPassthroughMode.OVERLAY,
     /** Preview resolution tier (short edge). See [VrPassthroughResolution]. Default 480P. */
     val passthroughResolution: VrPassthroughResolution = VrPassthroughResolution.P480,
-    /** Target preview frame rate. See [VrPassthroughFrameRate]. Default 30 (user's phone limit). */
+    /** Target preview frame rate (15 / 30 / 60). Default 30 = the user's phone limit. */
     val passthroughFrameRate: VrPassthroughFrameRate = VrPassthroughFrameRate.FPS_30,
     /**
      * Clockwise preview rotation. AUTO follows the sensor baseline; 0/90/180/270 are manual

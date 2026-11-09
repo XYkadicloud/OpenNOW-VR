@@ -391,9 +391,10 @@ internal class VrPassthroughCamera(
     }
 
     /**
-     * Highest AE fps range whose upper bound is within the requested frame rate. On a 30 fps-only
-     * phone a 60 fps request therefore resolves to the 30 fps range instead of failing or dropping
-     * the preview. If no range fits, the slowest stable range is used. Null = "let Camera2 choose".
+     * Highest AE fps range whose upper bound is within the requested tier (15 / 30 / 60). A 15 fps
+     * request prefers a fixed [15,15] over [7,15]; a 60 fps request on a 30 fps-only phone resolves
+     * to 30 instead of failing or dropping the preview. If no range fits, the slowest stable range
+     * is used. Null = "let Camera2 choose".
      */
     private fun chooseFpsRange(chars: CameraCharacteristics?, target: Int): Range<Int>? {
         val ranges: Array<Range<Int>>? = try {

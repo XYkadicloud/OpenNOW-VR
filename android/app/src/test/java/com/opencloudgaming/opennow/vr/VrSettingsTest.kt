@@ -127,8 +127,14 @@ class VrSettingsTest {
         assertEquals(480, VrPassthroughResolution.P480.shortEdge)
         assertEquals(720, VrPassthroughResolution.P720.shortEdge)
         assertEquals(1080, VrPassthroughResolution.P1080.shortEdge)
+        assertEquals(15, VrPassthroughFrameRate.FPS_15.fps)
         assertEquals(30, VrPassthroughFrameRate.FPS_30.fps)
         assertEquals(60, VrPassthroughFrameRate.FPS_60.fps)
+        assertEquals(3, VrPassthroughFrameRate.values().size)
+        // 15 fps is a real persisted tier, not just a UI label.
+        assertEquals(VrPassthroughFrameRate.FPS_15,
+            VrSettings(passthroughFrameRate = VrPassthroughFrameRate.FPS_15)
+                .sanitized().passthroughFrameRate)
         assertEquals(-1, VrPassthroughRotation.AUTO.degrees)
         assertEquals(90, VrPassthroughRotation.R90.degrees)
     }
