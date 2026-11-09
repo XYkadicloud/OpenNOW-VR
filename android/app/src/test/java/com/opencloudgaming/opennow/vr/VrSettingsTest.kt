@@ -100,6 +100,37 @@ class VrSettingsTest {
         assertEquals(0.85f, s.passthroughWindowScale, 0f)
         assertEquals(VrPassthroughAspect.FOUR_THREE, s.passthroughAspect)
         assertEquals(VrPassthroughMode.OVERLAY, s.passthroughMode)
+        // Camera controls requested after real-device feedback (方向错 / 拉伸 / 分辨率与帧率).
+        assertEquals(VrPassthroughResolution.P480, s.passthroughResolution)
+        assertEquals(VrPassthroughFrameRate.FPS_30, s.passthroughFrameRate)
+        assertEquals(VrPassthroughRotation.AUTO, s.passthroughRotation)
+        assertEquals(false, s.passthroughMirror)
+        // Default OFF = camera window shares the stream's MVP, no relative slide on head turns.
+        assertEquals(false, s.passthroughHeadLocked)
+    }
+
+    @Test
+    fun cameraControlTiersAndFlagsSurviveSanitize() {
+        val wild = VrSettings(
+            passthroughResolution = VrPassthroughResolution.P1080,
+            passthroughFrameRate = VrPassthroughFrameRate.FPS_60,
+            passthroughRotation = VrPassthroughRotation.R270,
+            passthroughMirror = true,
+            passthroughHeadLocked = true,
+        ).sanitized()
+        assertEquals(VrPassthroughResolution.P1080, wild.passthroughResolution)
+        assertEquals(VrPassthroughFrameRate.FPS_60, wild.passthroughFrameRate)
+        assertEquals(VrPassthroughRotation.R270, wild.passthroughRotation)
+        assertEquals(true, wild.passthroughMirror)
+        assertEquals(true, wild.passthroughHeadLocked)
+        assertEquals(360, VrPassthroughResolution.P360.shortEdge)
+        assertEquals(480, VrPassthroughResolution.P480.shortEdge)
+        assertEquals(720, VrPassthroughResolution.P720.shortEdge)
+        assertEquals(1080, VrPassthroughResolution.P1080.shortEdge)
+        assertEquals(30, VrPassthroughFrameRate.FPS_30.fps)
+        assertEquals(60, VrPassthroughFrameRate.FPS_60.fps)
+        assertEquals(-1, VrPassthroughRotation.AUTO.degrees)
+        assertEquals(90, VrPassthroughRotation.R90.degrees)
     }
 
     @Test

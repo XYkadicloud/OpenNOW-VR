@@ -245,12 +245,16 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private val ptFrameAvailable = AtomicBoolean(false)
     private val ptHasFrame = AtomicBoolean(false)
     private val ptUnavailable = AtomicBoolean(false)
-    @Volatile private var ptRotationDeg = 0
-    @Volatile private var ptMirror = false
-    /** Bumped by applySettings() and by the camera's orientation callback (GL thread consumes). */
+    /** AUTO rotation baseline (sensor installation angle) and front-lens default mirror. */
+    @Volatile private var ptAutoRotationDeg = 90
+    @Volatile private var ptAutoMirror = false
+    /** REAL preview buffer dimensions / effective frame rate, reported by the camera thread.
+     *  The window quad is built from THESE numbers, never from a guessed ratio. */
+    @Volatile private var ptPreviewW = 0
+    @Volatile private var ptPreviewH = 0
+    @Volatile private var ptPreviewFps = 0
+    /** Bumped by applySettings() and by the camera's config callback (GL thread consumes). */
     @Volatile private var ptConfigDirty = true
-    private var ptAppliedPreviewW = 0
-    private var ptAppliedPreviewH = 0
     private val ptPositionBuffer: FloatBuffer = newFloatBuffer(12)
     private val ptTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
     /** Head-LOCKED MVP: eye perspective * eyeFromHead, with the head rotation removed. */
@@ -275,9 +279,20 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             Log.w(TAG, "passthrough unavailable ($reason) -> black / 360° background fallback")
         }
 
-        override fun onPreviewOrientation(rotationDeg: Int, mirror: Boolean) {
-            ptRotationDeg = rotationDeg
-            ptMirror = mirror
+        override fun onPreviewConfig(
+            width: Int,
+            height: Int,
+            fps: Int,
+            autoRotationDeg: Int,
+            autoMirror: Boolean,
+        ) {
+            // Camera-thread callback: only volatile fields are written. The GL thread consumes
+            // them on the next syncPassthrough() and rebuilds the quad from the REAL size.
+            ptPreviewW = width
+            ptPreviewH = height
+            ptPreviewFps = fps
+            ptAutoRotationDeg = autoRotationDeg
+            ptAutoMirror = autoMirror
             ptConfigDirty = true
         }
     }
@@ -322,6 +337,11 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             next.passthroughWindowScale != prev.passthroughWindowScale ||
             next.passthroughAspect != prev.passthroughAspect ||
             next.passthroughMode != prev.passthroughMode ||
+            next.passthroughResolution != prev.passthroughResolution ||
+            next.passthroughFrameRate != prev.passthroughFrameRate ||
+            next.passthroughRotation != prev.passthroughRotation ||
+            next.passthroughMirror != prev.passthroughMirror ||
+            next.passthroughHeadLocked != prev.passthroughHeadLocked ||
             next.screenScale != prev.screenScale ||
             next.screenDistanceMeters != prev.screenDistanceMeters
         if (passthroughChanged) ptConfigDirty = true
@@ -529,7 +549,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
      * onDrawEye(): the "单纯放大" FILL mode does not re-render the scene, it zooms the finished
      * composite afterwards.
      *
-     * [headLockedMvp] is the transform for the camera window (eye matrices, no head rotation).
+     * [headLockedMvp] is the eye-only transform (no head rotation). By default the camera window
+     * shares the stream quad's base MVP instead, so the two layers cannot slide against each
+     * other; only passthroughHeadLocked=true still uses [headLockedMvp] for the window.
      */
     private fun drawEyeScene(
         mvp: FloatArray,
@@ -539,9 +561,20 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         drawPanel: Boolean,
         allowBackgroundLoad: Boolean,
     ) {
+        // Which base transform the stream quad uses in the current layout. OVERLAY keeps the
+        // original head-tracked `mvp`; the two windowed layouts use the eye-only transform.
+        val layoutRequested = useVideo && s.passthroughMode != VrPassthroughMode.OVERLAY
+        val streamBaseMvp = if (layoutRequested) headLockedMvp else mvp
+
+        // "很大的不协调感" fix: the OLD code ALWAYS drew the camera window with headLockedMvp while
+        // the OVERLAY stream quad used the head-tracked mvp, so turning your head made the live
+        // window slide against the game picture. Default = share the stream's base MVP (rigidly
+        // attached, zero relative motion). Opt-in passthroughHeadLocked restores the pinned window.
+        val cameraMvp = if (s.passthroughHeadLocked) headLockedMvp else streamBaseMvp
+
         // Both are BACKGROUND layers; never double-composite them. If passthrough is on but the
         // camera has no frame yet (or failed), fall back to the panorama / pure black as before.
-        val passthroughDrawn = drawPassthroughWindow(headLockedMvp, s)
+        val passthroughDrawn = drawPassthroughWindow(cameraMvp, s)
         if (!passthroughDrawn) drawBackground(s, mvp, allowBackgroundLoad)
         if (!drawPanel) return
         val handles = (if (useVideo) video else panel) ?: return
@@ -551,10 +584,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // passthroughDrawn so a camera failure (no permission / busy lens) falls back to the
         // ORIGINAL full-size picture instead of leaving a tiny game window over pure black.
         // The panel and menu (useVideo == false) always keep the original MVP — never shrunk.
-        val layoutActive = useVideo && passthroughDrawn &&
-            s.passthroughMode != VrPassthroughMode.OVERLAY
+        val layoutActive = layoutRequested && passthroughDrawn
         val streamMvp = if (layoutActive) {
-            VrMatrix4.multiplyInto(gameMvpMatrix, headLockedMvp, gameModelMatrix)
+            VrMatrix4.multiplyInto(gameMvpMatrix, streamBaseMvp, gameModelMatrix)
             gameMvpMatrix
         } else {
             mvp
@@ -869,8 +901,11 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         ptCamera = null
         releasePassthroughTexture()
         ptUnavailable.set(false)
-        ptRotationDeg = 0
-        ptMirror = false
+        ptAutoRotationDeg = 90
+        ptAutoMirror = false
+        ptPreviewW = 0
+        ptPreviewH = 0
+        ptPreviewFps = 0
         ptAppliedGameAspect = 0f
         VrMatrix4.identityInto(gameModelMatrix)
         ptConfigDirty = true
@@ -1111,8 +1146,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             GLES20.glDeleteTextures(1, intArrayOf(ptTextureId), 0)
             ptTextureId = 0
         }
-        ptAppliedPreviewW = 0
-        ptAppliedPreviewH = 0
+        ptPreviewW = 0
+        ptPreviewH = 0
+        ptPreviewFps = 0
         ptFrameAvailable.set(false)
         ptHasFrame.set(false)
     }
@@ -1148,23 +1184,21 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     }
 
     /**
-     * Camera2 sizes its output stream from SurfaceTexture.setDefaultBufferSize(), so it MUST be
-     * applied here (the renderer owns the SurfaceTexture) BEFORE the capture session is created.
-     * start() is idempotent on (facing, surface, previewW, previewH); a 4:3 <-> 16:9 change alters
-     * the size and therefore correctly forces a session restart instead of stretching the stream.
+     * Hands the SurfaceTexture + camera parameters to VrPassthroughCamera.
+     *
+     * The OLD code guessed a preview buffer here (1280x960 / 1280x720) with
+     * setDefaultBufferSize() and built the quad from that same guessed ratio. Camera2 only outputs
+     * sizes it advertises in StreamConfigurationMap, so the real buffer ratio frequently differed
+     * and the picture was stretched. Preview-size selection, buffer sizing and the fps request now
+     * live in the camera class, which reports the REAL values via onPreviewConfig(); the renderer
+     * builds the quad from those values (see rebuildPassthroughQuad). start() is idempotent on
+     * (facing, surface, resolution, aspect, frameRate), so a settings change cleanly restarts the
+     * session while a recomposition with unchanged values is free.
      */
     private fun configurePassthrough(s: VrSettings) {
-        val fourThree = s.passthroughAspect == VrPassthroughAspect.FOUR_THREE
-        val pw = if (fourThree) PASSTHROUGH_PREVIEW_W_4_3 else PASSTHROUGH_PREVIEW_W_16_9
-        val ph = if (fourThree) PASSTHROUGH_PREVIEW_H_4_3 else PASSTHROUGH_PREVIEW_H_16_9
-        val st = ptSurfaceTexture
-        if (st != null && (ptAppliedPreviewW != pw || ptAppliedPreviewH != ph)) {
-            st.setDefaultBufferSize(pw, ph)
-            ptAppliedPreviewW = pw
-            ptAppliedPreviewH = ph
-        }
+        val surfaceTexture = ptSurfaceTexture
         val surface = ptSurface
-        if (surface == null || video == null || ptTextureId == 0 ||
+        if (surfaceTexture == null || surface == null || video == null || ptTextureId == 0 ||
             !s.passthroughEnabled || s.passthroughOpacity <= 0f
         ) {
             ptCamera?.stop()
@@ -1172,26 +1206,59 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             return
         }
         val cam = ptCamera ?: VrPassthroughCamera(context, ptListener).also { ptCamera = it }
-        cam.start(surface, s.passthroughCameraFacing, pw, ph)
+        cam.start(
+            surfaceTexture,
+            surface,
+            s.passthroughCameraFacing,
+            s.passthroughResolution,
+            s.passthroughAspect,
+            s.passthroughFrameRate,
+        )
     }
 
     /**
-     * Builds the head-locked camera window quad AND the stream quad's model transform for the
-     * three selectable layouts. Only called when a setting / camera orientation / stream aspect
-     * changed, NEVER per frame, so the small temp arrays here are harmless.
+     * Effective clockwise rotation in {0, 90, 180, 270}. AUTO follows the camera's sensor
+     * baseline; any other VrPassthroughRotation is a manual override. Both the quad ratio and the
+     * UV rotation use this SAME value, so they can never disagree with each other.
+     */
+    private fun effectivePassthroughRotation(s: VrSettings): Int {
+        val deg = if (s.passthroughRotation == VrPassthroughRotation.AUTO) {
+            ptAutoRotationDeg
+        } else {
+            s.passthroughRotation.degrees
+        }
+        return ((deg / 90) * 90 + 360) % 360
+    }
+
+    /**
+     * Builds the camera window quad AND the stream quad's model transform for the three layouts.
+     * Only called when a setting / camera config / stream aspect changed, NEVER per frame.
      *
-     * All layout numbers are expressed in the "equivalent z = -d1 plane" so they map directly
-     * onto VrScreenGeometry's stream quad. The camera quad lives further away (z = -d2), so BOTH
-     * its size and its centre offset are multiplied by d2/d1 to preserve ANGULAR size/position.
-     * Nothing is ever stretched: the camera window keeps its 4:3 / 16:9 ratio and the stream quad
-     * keeps VrSession.videoAspect in every mode.
+     * All layout numbers are expressed in the "equivalent z = -d1 plane" so they map directly onto
+     * VrScreenGeometry's stream quad. The camera quad lives slightly further away (z = -d2), so
+     * BOTH its size and its centre offset are multiplied by d2/d1 to preserve ANGULAR size. Nothing
+     * is stretched: the camera window keeps the REAL Camera2 preview ratio (after the effective
+     * rotation's aspect swap) and the stream quad keeps VrSession.videoAspect in every mode.
      */
     private fun rebuildPassthroughQuad(s: VrSettings) {
-        val cameraAspect = if (s.passthroughAspect == VrPassthroughAspect.FOUR_THREE) {
+        val effectiveRotation = effectivePassthroughRotation(s)
+        // Use the REAL preview dimensions reported by Camera2, NOT a guessed 4:3 / 16:9. This is
+        // the single change that removes the "直接拉伸" distortion.
+        val previewAspect = if (ptPreviewW > 0 && ptPreviewH > 0) {
+            ptPreviewW.toFloat() / ptPreviewH.toFloat()
+        } else if (s.passthroughAspect == VrPassthroughAspect.FOUR_THREE) {
             PASSTHROUGH_ASPECT_4_3
         } else {
             PASSTHROUGH_ASPECT_16_9
         }
+        // A 90/270 rotation swaps the effective width and height of the upright picture. Building
+        // the quad with the un-swapped ratio would squeeze it by aspect^2 — part of the reported
+        // "很大的不协调感 / 压扁" — so take the reciprocal for quarter turns.
+        val cameraAspect = (if (effectiveRotation == 90 || effectiveRotation == 270) {
+            1f / previewAspect
+        } else {
+            previewAspect
+        }).coerceIn(0.25f, 8f)
         val gameAspect = VrSession.videoAspect.coerceIn(0.25f, 8f)
         ptAppliedGameAspect = gameAspect
         val d1 = s.screenDistanceMeters.coerceAtLeast(0.1f)
@@ -1272,13 +1339,14 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             // su/sv (not u/v) so these UV locals never shadow the outer `val u` = halfHeight.
             var su = uv[i]
             var sv = uv[i + 1]
-            when (ptRotationDeg) {
+            when (effectiveRotation) {
                 90 -> { val nu = sv; sv = 1f - su; su = nu }
                 180 -> { su = 1f - su; sv = 1f - sv }
                 270 -> { val nu = 1f - sv; sv = su; su = nu }
                 else -> Unit
             }
-            if (ptMirror) su = 1f - su
+            // Front lenses are mirrored by default; the user's extra mirror XORs with that.
+            if (ptAutoMirror != s.passthroughMirror) su = 1f - su
             ptTexCoordBuffer.put(su)
             ptTexCoordBuffer.put(sv)
             i += 2
@@ -1381,6 +1449,29 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         hint.textSize = 15f
         canvas.drawText("长按 START+SELECT 或 HOME：打开设置（二级页面）", 44f, 280f, hint)
         canvas.drawText("系统返回键 / 设置「退出 VR」退出 · L1+R1 只进入", 44f, 306f, hint)
+
+        // Real camera parameters, so "方向是错的 / 分辨率没生效" is diagnosable on the device
+        // without adb. Only shown when passthrough is on, so the default board is unchanged.
+        if (s.passthroughEnabled) {
+            hint.color = c[4]
+            hint.textSize = 15f
+            val rot = effectivePassthroughRotation(s)
+            val mirror = ptAutoMirror != s.passthroughMirror
+            canvas.drawText(
+                String.format(
+                    Locale.US,
+                    "透视 %dx%d · %d fps · 旋转 %d° · 镜像 %s · %s",
+                    ptPreviewW, ptPreviewH, ptPreviewFps, rot,
+                    if (mirror) "开" else "关",
+                    if (ptHasFrame.get()) "画面正常" else "等待相机帧（黑底降级）",
+                ),
+                44f, 348f, hint,
+            )
+            canvas.drawText(
+                if (s.passthroughHeadLocked) "窗口：钉在眼前（与幕布会相对滑动）" else "窗口：跟随幕布（默认·无相对滑动）",
+                44f, 370f, hint,
+            )
+        }
 
         hint.color = c[7]
         hint.textSize = 14f
@@ -1862,19 +1953,25 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     private companion object {
         // --- 摄像头透视 / Passthrough --------------------------------------------------------
-        // Preview buffer sizes. 4:3 is the native sensor ratio on most phones; 16:9 is a crop.
-        // SurfaceTexture.setDefaultBufferSize() and the window quad share the SAME ratio, so the
-        // live picture is never stretched. Switching the ratio restarts the Camera2 session.
-        const val PASSTHROUGH_PREVIEW_W_4_3 = 1280
-        const val PASSTHROUGH_PREVIEW_H_4_3 = 960
-        const val PASSTHROUGH_PREVIEW_W_16_9 = 1280
-        const val PASSTHROUGH_PREVIEW_H_16_9 = 720
+        // NO hardcoded preview size any more: VrPassthroughCamera picks the real
+        // StreamConfigurationMap size and reports it via onPreviewConfig(). These two ratios are
+        // only a FALLBACK for the first frame before the camera has opened.
         const val PASSTHROUGH_ASPECT_4_3 = 4f / 3f
         const val PASSTHROUGH_ASPECT_16_9 = 16f / 9f
-        /** Camera window sits this much further away than the stream screen (metres). */
-        const val PASSTHROUGH_WINDOW_DEPTH_M = 0.8f
-        /** OVERLAY: camera window half-height / stream half-height, at windowScale = 1. */
-        const val PASSTHROUGH_WINDOW_VS_SCREEN = 2.2f
+        /**
+         * Camera window depth behind the stream screen (metres). Was 0.8, which made the window
+         * look like it was floating far behind the game and amplified the relative slide between
+         * the head-locked camera and the head-tracked screen ("很大的不协调感"). 0.12 keeps the
+         * two layers close together while still letting the nearer stream quad composite on top.
+         */
+        const val PASSTHROUGH_WINDOW_DEPTH_M = 0.12f
+        /**
+         * OVERLAY: camera window half-height / stream half-height at windowScale = 1. Was 2.2,
+         * i.e. more than twice the game screen — a huge ring of live camera around the picture
+         * that read as visual noise. 1.45 still shows the surroundings around the edges but keeps
+         * the composition calm. Adjustable via passthroughWindowScale (0.30..1.50).
+         */
+        const val PASSTHROUGH_WINDOW_VS_SCREEN = 1.45f
         /** CAMERA_MAIN: camera is enlarged into the main picture (at windowScale = 1). */
         const val PASSTHROUGH_CAMERA_MAIN_VS_SCREEN = 1.7f
         /** SIDE_BY_SIDE: half-width of each window, relative to the stream half-height. */

@@ -34,6 +34,11 @@ enum class VrMenuItemId {
     PASSTHROUGH_WINDOW,
     PASSTHROUGH_ASPECT,
     PASSTHROUGH_MODE,
+    PASSTHROUGH_RESOLUTION,
+    PASSTHROUGH_FPS,
+    PASSTHROUGH_ROTATION,
+    PASSTHROUGH_MIRROR,
+    PASSTHROUGH_HEAD_LOCKED,
     // 快捷
     SCAN_QR,
     RESET_DEFAULTS,
@@ -106,7 +111,7 @@ object VrMenuModel {
         VrMenuItem(VrMenuItemId.MENU_REPEAT, "摇杆重复 (ms)", VrMenuItemKind.RANGE,
             VrRanges.REPEAT_MIN_MS.toFloat(), VrRanges.REPEAT_MAX_MS.toFloat(), VrRanges.REPEAT_STEP_MS.toFloat()),
         VrMenuItem(VrMenuItemId.SHOW_STATUS, "显示状态", VrMenuItemKind.TOGGLE),
-        // 环境 (18..25)
+        // 环境 (18..30)
         VrMenuItem(VrMenuItemId.BACKGROUND, "360° 背景图", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
@@ -124,14 +129,20 @@ object VrMenuModel {
         // Layout is a SETTING, never a shortcut step: L2+R2 long-press only flips the ON/OFF
         // switch above. A cycles these three styles here and on the phone-side settings page.
         VrMenuItem(VrMenuItemId.PASSTHROUGH_MODE, "透视布局", VrMenuItemKind.ENUM),
-        // 快捷 (26..28)
+        // Resolution / frame rate / orientation are per-device camera controls (user request).
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_RESOLUTION, "透视分辨率", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_FPS, "透视帧率", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_ROTATION, "透视画面旋转", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_MIRROR, "透视左右镜像", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_HEAD_LOCKED, "透视钉在眼前", VrMenuItemKind.TOGGLE),
+        // 快捷 (31..33)
         VrMenuItem(VrMenuItemId.SCAN_QR, "纸盒扫码校准", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.RESET_DEFAULTS, "恢复默认", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.EXIT_VR, "退出 VR", VrMenuItemKind.ACTION),
     )
 
     /** Index range of each page inside [items]. Verified at class-init so a bad split fails fast. */
-    private val pageRanges: List<IntRange> = listOf(0..9, 10..14, 15..17, 18..25, 26..28)
+    private val pageRanges: List<IntRange> = listOf(0..9, 10..14, 15..17, 18..30, 31..33)
 
     init {
         require(pageRanges.size == pages.size) { "page count mismatch" }
@@ -189,6 +200,15 @@ object VrMenuModel {
             VrPassthroughMode.CAMERA_MAIN -> 0.5f
             VrPassthroughMode.SIDE_BY_SIDE -> 1f
         }
+        VrMenuItemId.PASSTHROUGH_RESOLUTION ->
+            settings.passthroughResolution.ordinal.toFloat() /
+                (VrPassthroughResolution.values().size - 1).toFloat()
+        VrMenuItemId.PASSTHROUGH_FPS -> settings.passthroughFrameRate.ordinal.toFloat()
+        VrMenuItemId.PASSTHROUGH_ROTATION ->
+            settings.passthroughRotation.ordinal.toFloat() /
+                (VrPassthroughRotation.values().size - 1).toFloat()
+        VrMenuItemId.PASSTHROUGH_MIRROR -> if (settings.passthroughMirror) 1f else 0f
+        VrMenuItemId.PASSTHROUGH_HEAD_LOCKED -> if (settings.passthroughHeadLocked) 1f else 0f
         else -> 0f
     }
 
@@ -231,6 +251,26 @@ object VrMenuModel {
             VrPassthroughMode.CAMERA_MAIN -> "摄像头为主·游戏小窗"
             VrPassthroughMode.SIDE_BY_SIDE -> "双窗口并排"
         }
+        VrMenuItemId.PASSTHROUGH_RESOLUTION -> when (settings.passthroughResolution) {
+            VrPassthroughResolution.P360 -> "360P"
+            VrPassthroughResolution.P480 -> "480P（默认）"
+            VrPassthroughResolution.P720 -> "720P"
+            VrPassthroughResolution.P1080 -> "1080P"
+        }
+        VrMenuItemId.PASSTHROUGH_FPS -> when (settings.passthroughFrameRate) {
+            VrPassthroughFrameRate.FPS_30 -> "30 帧（默认）"
+            VrPassthroughFrameRate.FPS_60 -> "60 帧"
+        }
+        VrMenuItemId.PASSTHROUGH_ROTATION -> when (settings.passthroughRotation) {
+            VrPassthroughRotation.AUTO -> "自动（传感器基准）"
+            VrPassthroughRotation.R0 -> "0°"
+            VrPassthroughRotation.R90 -> "90°"
+            VrPassthroughRotation.R180 -> "180°"
+            VrPassthroughRotation.R270 -> "270°"
+        }
+        VrMenuItemId.PASSTHROUGH_MIRROR -> if (settings.passthroughMirror) "开" else "关"
+        VrMenuItemId.PASSTHROUGH_HEAD_LOCKED ->
+            if (settings.passthroughHeadLocked) "钉在眼前（旧行为）" else "跟随幕布（默认·不晕）"
         VrMenuItemId.RECENTER -> "按 A 执行"
         VrMenuItemId.SCAN_QR -> "按 A 执行"
         VrMenuItemId.RESET_DEFAULTS -> "按 A 执行"
@@ -287,7 +327,10 @@ object VrMenuModel {
         VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.VERTICAL_FLIP,
         VrMenuItemId.CENTER_ALIGN_LINE, VrMenuItemId.BACKGROUND,
         VrMenuItemId.PASSTHROUGH, VrMenuItemId.PASSTHROUGH_FACING,
-        VrMenuItemId.PASSTHROUGH_ASPECT, VrMenuItemId.PASSTHROUGH_MODE -> toggle(settings, id)
+        VrMenuItemId.PASSTHROUGH_ASPECT, VrMenuItemId.PASSTHROUGH_MODE,
+        VrMenuItemId.PASSTHROUGH_RESOLUTION, VrMenuItemId.PASSTHROUGH_FPS,
+        VrMenuItemId.PASSTHROUGH_ROTATION, VrMenuItemId.PASSTHROUGH_MIRROR,
+        VrMenuItemId.PASSTHROUGH_HEAD_LOCKED -> toggle(settings, id)
         else -> settings
     }.sanitized()
 
@@ -336,6 +379,28 @@ object VrMenuModel {
                 VrPassthroughMode.SIDE_BY_SIDE -> VrPassthroughMode.OVERLAY
             },
         )
+        // Camera controls: A cycles each ENUM, flips the extra mirror TOGGLE. These are pure
+        // settings — the L2+R2 shortcut never touches them.
+        VrMenuItemId.PASSTHROUGH_RESOLUTION -> settings.copy(
+            passthroughResolution = VrPassthroughResolution.values()[
+                (settings.passthroughResolution.ordinal + 1) % VrPassthroughResolution.values().size
+            ],
+        )
+        VrMenuItemId.PASSTHROUGH_FPS -> settings.copy(
+            passthroughFrameRate = if (settings.passthroughFrameRate == VrPassthroughFrameRate.FPS_30) {
+                VrPassthroughFrameRate.FPS_60
+            } else {
+                VrPassthroughFrameRate.FPS_30
+            },
+        )
+        VrMenuItemId.PASSTHROUGH_ROTATION -> settings.copy(
+            passthroughRotation = VrPassthroughRotation.values()[
+                (settings.passthroughRotation.ordinal + 1) % VrPassthroughRotation.values().size
+            ],
+        )
+        VrMenuItemId.PASSTHROUGH_MIRROR -> settings.copy(passthroughMirror = !settings.passthroughMirror)
+        VrMenuItemId.PASSTHROUGH_HEAD_LOCKED ->
+            settings.copy(passthroughHeadLocked = !settings.passthroughHeadLocked)
         else -> settings
     }
 

@@ -1541,3 +1541,120 @@ onRendererShutdown: ptCamera.stop() → release() → releasePassthroughTexture(
 - 三种布局下串流 quad 用的是 head-locked MVP（与摄像头窗口一致），所以游戏画面在这些模式下
   也固定在正前方；`OVERLAY` 模式仍用随头转的原 MVP。这是当前的设计选择，不是 bug。
 
+> **以上 §20.8 / §20.9 的相机方向、拉伸、相对滑动、帧率相关条目已由 §21 修复。**
+> 本节保留作为「当时为什么那样写」的历史记录，不要再按它去改代码。
+
+---
+
+## 21. 2026-11-09 真机反馈：摄像头方向错 / 直接拉伸 / 不协调 / 分辨率与帧率
+
+### 21.1 用户诉求（原话）
+
+> 「你的问题有点大，摄像头方向是错的，然后这个你也是直接拉伸，然后而且呢透视你这边各种的做的
+> 都还是有问题，其次就是呢你能不能加下分辨率以及帧率选项。虽然说我这个手机帧率只有 30 帧，
+> 但你是为了其他机型，呃也可以做一下，分辨率你可以做 360P、480P 以及 720P 三种。当然也可以
+> 加一下 1080P，我目前主要用肯定是 480P，然后呢你目前摄像头方向是错的，以及呢有很大的
+> 协呃不协调感，你自己调一下，然后我发你几张图片，一张是我现实的图片来去告诉你正确的呃方向。」
+
+附 4 张真机截图 / 现实照片。要求「自己调一下」，不反问。
+
+### 21.2 图片对比结论
+
+- 现实照片：右侧窗格反光 / 灯带是**竖直矩形**，笔记本屏幕在上方偏左，键盘在下方偏右，相机俯视桌面。
+- VR 透视小窗口 / 全屏背景：窗格反光变成**水平长条**，地砖缝隙方向跟着整体转了约 **90°**。
+- 全屏透视背景里窗格被压扁 / 拉长，地砖透视不协调 → 除旋转外还存在**宽高比错配**。
+
+### 21.3 四个根因（源码级）
+
+1. **方向错 — 用错了公式。** `VrPassthroughCamera.previewRotationDeg()` 旧实现是
+   `(SENSOR_ORIENTATION - displayRotation + 360) % 360`，这是 **JPEG_ORIENTATION 拍照**公式。
+   Camera2 的**预览缓冲不随屏幕旋转**，`SurfaceTexture.getTransformMatrix()` 也只含垂直翻转 /
+   裁剪、不含旋转。VR 强制横屏（`displayDeg = 90`）时，常见传感器角 90° 算出 **0°**，
+   于是传感器安装角完全没补偿，画面横躺 90°。
+2. **直接拉伸 — 假定尺寸。** 旧 `configurePassthrough()` 写死
+   `setDefaultBufferSize(1280×960 / 1280×720)` 并按这个 4:3 / 16:9 比例建 quad。Camera2 只会
+   输出 `StreamConfigurationMap` 里实际存在的尺寸，真实比例经常不同；另外 90° / 270° 旋转后
+   有效宽高应取倒数，旧代码没取，等于按 `aspect² ≈ 1.78` 倍挤压画面。
+3. **不协调感 — 两层 MVP 不一致。** `drawEyeScene()` 里摄像头窗口固定用
+   `headLockedMvpMatrix`（eye 矩阵、**无头部旋转**），而默认 `OVERLAY` 的串流幕布用 `mvpMatrix`
+   （**含头部旋转**），转头时两层相对滑动。再叠加 `PASSTHROUGH_WINDOW_DEPTH_M = 0.8f`（窗口挂在
+   幕布后 0.8 m）与 `PASSTHROUGH_WINDOW_VS_SCREEN = 2.2f`（窗口是幕布两倍多高），
+   形成一大圈晃动的实时环境噪声。
+4. **缺分辨率 / 帧率。** r5 的相机参数是硬编码的，无任何档位。
+
+### 21.4 本轮实际改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `VrSettings.kt` | 新增 `VrPassthroughResolution{P360,P480,P720,P1080}`、`VrPassthroughFrameRate{FPS_30,FPS_60}`、`VrPassthroughRotation{AUTO,R0,R90,R180,R270}` 三个枚举；新增 `passthroughResolution / passthroughFrameRate / passthroughRotation / passthroughMirror / passthroughHeadLocked` 五个字段并纳入 `sanitized()`。设置项 26 → **31** |
+| `VrSettingsStore.kt` | 5 个新 key 的读写 + 默认值回退，全部走 `runCatching { valueOf(...) }` |
+| `VrMenuModel.kt` | 5 个新行；菜单 29 → **34 行**，环境页 `18..30`（13 行）、快捷页 `31..33`；`rawValue / display / activate / toggle` 全链路覆盖，`display()` 仍是穷尽 when |
+| `VrSettingSpec.kt` | 未改（新字段是枚举 / 开关，不是数字滑块） |
+| `VrSettingsSection.kt` | 2D 设置页新增 3 个循环按钮（分辨率 / 帧率 / 旋转）+ 2 个开关（额外镜像 / 钉在眼前），含真机排障文案；更新透视总说明 |
+| `VrPassthroughCamera.kt` | `Listener.onPreviewOrientation` → `onPreviewConfig(width,height,fps,autoRotationDeg,autoMirror)`；新增 `requestedWidth / choosePreviewSize / chooseFpsRange`；`start()` 参数改为 `(surfaceTexture, surface, facing, resolution, aspect, frameRate)`；在 `onOpened` 里选真实尺寸、`setDefaultBufferSize`、回报配置；`CONTROL_AE_TARGET_FPS_RANGE` 写入 repeating request；`previewRotationDeg()` 改为直接返回传感器安装角 |
+| `VrTheaterRenderer.kt` | 新增 `ptAutoRotationDeg / ptAutoMirror / ptPreviewW / ptPreviewH / ptPreviewFps`；`effectivePassthroughRotation()`；quad 按**真实预览宽高**构建、90°/270° 取倒数；`drawEyeScene()` 让窗口与幕布共用 `streamBaseMvp`（可 `passthroughHeadLocked` 覆盖）；深度 `0.8 → 0.12`、窗口比例 `2.2 → 1.45`；状态面板显示实际宽高 / 帧率 / 旋转 / 镜像 / 窗口模式 |
+| 测试 | `VrMenuModelTest` 34 行 / 环境 13 行 + 2 个新用例；`VrSettingsTest` 5 个新默认值 + 枚举档位 / sanitize 用例 |
+
+### 21.5 相机 / 渲染链路
+
+```
+VrSettings (档位)
+  -> configurePassthrough()  cam.start(surfaceTexture, surface, facing, resolution, aspect, fps)
+  -> VrPassthroughCamera.onOpened (camera thread)
+       getCameraCharacteristics -> SCALER_STREAM_CONFIGURATION_MAP.getOutputSizes(SurfaceTexture)
+       choosePreviewSize(): 优先比例误差 <= 0.03 且短边最接近档位；否则取短边最接近的真实尺寸
+       chooseFpsRange():    upper <= target 中取 upper 最大、再取 lower 最大（优先 [30,30] 而非 [15,30]）
+       surfaceTexture.setDefaultBufferSize(realW, realH)   <- 会话创建之前，避免 getTransformMatrix 带裁剪
+       Listener.onPreviewConfig(realW, realH, effectiveFps, sensorAngle, frontMirror)
+       repeating request 写 CONTROL_AE_TARGET_FPS_RANGE
+  -> renderer (GL thread, volatile 字段)
+       syncPassthrough() 消费 ptConfigDirty -> rebuildPassthroughQuad()
+       effectiveRotation = AUTO ? sensorAngle : manual
+       cameraAspect = effectiveRotation in {90,270} ? 1/(realW/realH) : realW/realH
+       UV 烘焙 effectiveRotation + (autoMirror XOR userMirror)
+  -> drawPassthroughWindow(cameraMvp)  cameraMvp = headLocked ? headLockedMvp : streamBaseMvp
+```
+
+分辨率档位按**短边**命名，是**目标值不是硬编码缓冲**：设备没有精确档时选最接近的真实尺寸，
+状态面板显示真实值，因此任何档位都不会拉伸。`chooseFpsRange()` 对「同类 upper 取 lower 更大」
+是本轮验证脚本发现并修掉的隐患：否则 30 帧档会选中 `[15,30]`，低光下掉到 15 fps。
+
+### 21.6 「不协调感」的收敛（设计取舍）
+
+推翻了 §20.2 里「head-locked 才物理正确」的判断：**真机证明**它让窗口与幕布相对滑动。
+现在默认 `passthroughHeadLocked = false`，窗口与幕布共用同一基础 MVP，转头零相对运动，
+观感是「游戏幕布后面挂了一块实时画面板」。旧行为保留为开关，没有删除。
+`CAMERA_MAIN / SIDE_BY_SIDE` 两种窗口布局本来就用 eye-only 基础 MVP，改后两层仍然一致。
+相机失败降级时 `layoutActive` 仍受 `passthroughDrawn` 门控，游戏画面回到原尺寸不缩成小窗。
+
+### 21.7 验证
+
+- 本机 Python 复刻菜单分页 / 枚举循环 / 设置默认值 / Camera2 尺寸与帧率选择 / 传感器旋转基准 /
+  quad 比例倒数 / MVP 选择 / UV 旋转双射 / 镜像 XOR：**78 条断言全绿**。
+- 静态检查：34 个菜单 id 全部出现在 `items`，`display()` 无 `else` 且覆盖 34/34；
+  31 个设置字段全部纳入 `sanitized()` 的 copy（3 个历史非数值字段依赖 data class copy 保留）；
+  `git diff --check` 无空白错误。
+- 本机无 Android SDK / Gradle / JDK 17，Kotlin 编译与 JVM 单测只能靠 GitHub Actions。
+
+### 21.8 待真机复测（CI 抓不到）
+
+1. 装本轮 APK，开透视后看状态面板：**实际宽高 / 帧率 / 生效旋转角 / 镜像 / 窗口模式**；
+2. 对照现实照片，AUTO 是否正立；不正立就在「环境」页依次拨 `0° / 90° / 180° / 270°`，
+   选正立那档（这正是把旋转做成可调项的目的）；
+3. 竖直线条（窗格 / 灯带）是否仍是竖直且不被压扁；窗格长宽比与现实是否一致；
+4. 转头时窗口与游戏幕布是否一起移动、无相对滑动；`passthroughHeadLocked` 开 / 关对比；
+5. 依次切 `360P / 480P / 720P / 1080P`，确认状态面板实际尺寸变化、无拉伸、无黑屏；
+6. 30 / 60 帧切换：30 帧手机选 60 应显示实际 30 而不是黑屏或掉帧；
+7. 前后置摄像头、额外镜像、三种布局、相机被占用降级、反复进出 VR 是否泄漏。
+
+### 21.9 §20.9 技术债处置结论
+
+- 「`previewRotationDeg()` 公式 + 未做成可调项」→ **已修**：改为传感器安装角基准并新增
+  `VrPassthroughRotation` 手动覆盖。
+- 「`getTransformMatrix()` 可能与 UV 双重旋转」→ **已定位**：`setDefaultBufferSize()` 现在用
+  真实预览尺寸且在会话创建前设置，Camera2 生产者与 GL 纹理尺寸一致，stMatrix 不含裁剪缩放，
+  只含垂直翻转，与 UV 旋转可组合、不冲突。
+- 「三种布局用 head-locked、`OVERLAY` 用随头转」→ **不再是设计选择**：默认统一为幕布的基础
+  MVP，只有显式 `passthroughHeadLocked = true` 才回退旧行为。
+- `triggerHoldConsumed` 的松开事件依赖仍是遗留项，本轮未动。
+

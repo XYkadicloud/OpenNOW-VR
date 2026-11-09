@@ -146,9 +146,10 @@ fun VrSettingsSection() {
             label = "摄像头透视（Passthrough）",
             checked = settings.passthroughEnabled,
             description = "把手机摄像头的实时画面放进 VR，不摘纸盒也能看见周围。手机不是 360° 摄像头，" +
-                "所以画面是一个保持原生 4:3 比例、锁定正前方的居中窗口，窗口外仍是纯黑；串流幕布始终盖在窗口之上，" +
-                "不会被挡住。相机预览缓冲与窗口几何共用同一比例，画面不会被拉伸。需要相机权限；无摄像头、" +
-                "权限被拒或摄像头被占用（例如串流正在录制摄像头）时自动降级回原来的黑底，VR 不会黑屏或崩溃。" +
+                "所以画面是一个锁定正前方的居中窗口，窗口外仍是纯黑；串流幕布始终盖在窗口之上，不会被挡住。" +
+                "窗口按 Camera2 实际输出的预览宽高构建（分辨率 / 帧率 / 旋转 / 镜像 / 比例都可在下面调），" +
+                "不会再被直接拉伸，方向也可手动拨正。需要相机权限；无摄像头、权限被拒或摄像头被占用" +
+                "（例如串流正在录制摄像头）时自动降级回原来的黑底，VR 不会黑屏或崩溃。" +
                 "开启时优先于 360° 背景图，两者不会叠加。",
         ) { checked ->
             // VrSession.updateSettings() detects the OFF -> ON edge and asks MainActivity for the
@@ -214,6 +215,89 @@ fun VrSettingsSection() {
             modifier = Modifier.padding(horizontal = 4.dp),
         )
 
+        // --- 真机反馈修复：方向错 / 直接拉伸 / 缺分辨率与帧率 ---------------------------------
+        val resolutionLabel = when (settings.passthroughResolution) {
+            VrPassthroughResolution.P360 -> "360P"
+            VrPassthroughResolution.P480 -> "480P（默认）"
+            VrPassthroughResolution.P720 -> "720P"
+            VrPassthroughResolution.P1080 -> "1080P"
+        }
+        TextButton(onClick = {
+            val all = VrPassthroughResolution.values()
+            val next = all[(settings.passthroughResolution.ordinal + 1) % all.size]
+            VrSession.updateSettings(settings.copy(passthroughResolution = next))
+        }) {
+            Text("透视分辨率：$resolutionLabel（点击切换）")
+        }
+        Text(
+            "按短边像素分档，默认 480P。设备不一定支持精确尺寸，App 会从 Camera2 实际支持的预览尺寸里" +
+                "挑最接近、比例一致的一档，并用拿到的真实宽高去建窗口，所以任何档位都不会拉伸画面。" +
+                "360P 最省电，720P / 1080P 更清晰但更吃性能，低端机建议留在 480P。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+
+        val fpsLabel = when (settings.passthroughFrameRate) {
+            VrPassthroughFrameRate.FPS_30 -> "30 帧（默认）"
+            VrPassthroughFrameRate.FPS_60 -> "60 帧"
+        }
+        TextButton(onClick = {
+            val next = if (settings.passthroughFrameRate == VrPassthroughFrameRate.FPS_30) {
+                VrPassthroughFrameRate.FPS_60
+            } else {
+                VrPassthroughFrameRate.FPS_30
+            }
+            VrSession.updateSettings(settings.copy(passthroughFrameRate = next))
+        }) {
+            Text("透视帧率：$fpsLabel（点击切换）")
+        }
+        Text(
+            "写入 Camera2 的自动曝光 FPS 区间。若设备只支持 30 帧，选 60 帧会自动回落到 30，" +
+                "不会黑屏；状态面板会显示实际生效的帧率。其他机型可以开 60 帧。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+
+        val rotationLabel = when (settings.passthroughRotation) {
+            VrPassthroughRotation.AUTO -> "自动（传感器基准）"
+            VrPassthroughRotation.R0 -> "0°"
+            VrPassthroughRotation.R90 -> "90°"
+            VrPassthroughRotation.R180 -> "180°"
+            VrPassthroughRotation.R270 -> "270°"
+        }
+        TextButton(onClick = {
+            val all = VrPassthroughRotation.values()
+            val next = all[(settings.passthroughRotation.ordinal + 1) % all.size]
+            VrSession.updateSettings(settings.copy(passthroughRotation = next))
+        }) {
+            Text("透视画面旋转：$rotationLabel（点击切换）")
+        }
+        Text(
+            "摄像头方向不对时在这里拨：AUTO 按摄像头传感器安装角做基准补偿（预览缓冲本身不会跟着" +
+                "屏幕旋转，这是之前画面横躺 90° 的根因）；仍不对就按顺序试 0° / 90° / 180° / 270°，" +
+                "对照现实场景选正立的那一档。旋转 90° / 270° 时窗口比例自动取倒数，画面不会被拉长或压扁。" +
+                "VR 状态面板会显示当前生效角度与实际预览尺寸。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        SettingSwitch(
+            label = "透视画面额外左右镜像",
+            checked = settings.passthroughMirror,
+            description = "在前置摄像头自动镜像之外再做一次水平翻转。若画面左右反了（文字是反的），打开它；" +
+                "前后置镜头都适用，随时可关回。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(passthroughMirror = checked))
+        }
+        SettingSwitch(
+            label = "透视窗口钉在眼前",
+            checked = settings.passthroughHeadLocked,
+            description = "默认关闭：摄像头窗口与游戏幕布共用同一个空间变换，转头时两层一起移动，不会互相" +
+                "滑动，这是真机反馈「很大的不协调感」的修复。打开则恢复旧行为——窗口始终钉在双眼正前方，" +
+                "游戏幕布随头移动，两层会相对滑动。两种都保留，按自己不晕的那一档选。",
+        ) { checked ->
+            VrSession.updateSettings(settings.copy(passthroughHeadLocked = checked))
+        }
+
         SettingSwitch(
             label = "360° 背景图（VR 环境）",
             checked = settings.backgroundEnabled,
@@ -251,9 +335,11 @@ fun VrSettingsSection() {
                 "「整体放大」1.00x = 原版输出，默认 1.35x，可一直调到 2.50x；往上调逐步把上下黑边顶满，若还看到大黑边就继续加大。" +
                 "这是纯最终画面后处理，不改 FOV / 投影 / 几何 / shader，双眼始终保持原来的重叠关系；打开 VR 设置菜单时会自动暂停放大，菜单不会被裁。" +
                 "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。" +
-                "「摄像头透视」是单目实时画面，不是 360° 环境：它以固定窗口显示在正前方（窗口大小、可见度、4:3 / 16:9 比例可调），" +
-                "默认 4:3 是手机传感器的原生比例、不裁切；窗口外保持纯黑，串流画面始终在最上层。" +
-                "窗口随头锁定是因为手机与摄像头一起转，这样才是物理正确的，但左右眼仍有正确视差，看起来像正前方开了一扇窗。",
+                "「摄像头透视」是单目实时画面，不是 360° 环境：它以固定窗口显示在正前方（窗口大小、可见度、4:3 / 16:9 比例、" +
+                "360P / 480P / 720P / 1080P 分辨率、30 / 60 帧、0° / 90° / 180° / 270° 旋转、额外镜像都可调），" +
+                "默认 4:3 + 480P + 30 帧。窗口按设备真实预览尺寸同比例构建，不拉伸；方向不对用「透视画面旋转」拨正。" +
+                "窗口外保持纯黑，串流画面始终在最上层。窗口随头锁定是因为手机与摄像头一起转，这样才是物理正确的，" +
+                "但左右眼仍有正确视差，看起来像正前方开了一扇窗。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),
         )

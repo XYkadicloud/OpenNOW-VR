@@ -56,6 +56,25 @@ class VrSettingsStore(context: Context) {
                 prefs.getString(K_PASSTHROUGH_MODE, VrSettings.DEFAULT.passthroughMode.name) ?: "",
             )
         }.getOrDefault(VrSettings.DEFAULT.passthroughMode),
+        passthroughResolution = runCatching {
+            VrPassthroughResolution.valueOf(
+                prefs.getString(K_PASSTHROUGH_RESOLUTION, VrSettings.DEFAULT.passthroughResolution.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughResolution),
+        passthroughFrameRate = runCatching {
+            VrPassthroughFrameRate.valueOf(
+                prefs.getString(K_PASSTHROUGH_FPS, VrSettings.DEFAULT.passthroughFrameRate.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughFrameRate),
+        passthroughRotation = runCatching {
+            VrPassthroughRotation.valueOf(
+                prefs.getString(K_PASSTHROUGH_ROTATION, VrSettings.DEFAULT.passthroughRotation.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughRotation),
+        passthroughMirror = prefs.getBoolean(K_PASSTHROUGH_MIRROR, VrSettings.DEFAULT.passthroughMirror),
+        passthroughHeadLocked = prefs.getBoolean(
+            K_PASSTHROUGH_HEAD_LOCKED, VrSettings.DEFAULT.passthroughHeadLocked,
+        ),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -87,6 +106,11 @@ class VrSettingsStore(context: Context) {
             .putFloat(K_PASSTHROUGH_WINDOW, s.passthroughWindowScale)
             .putString(K_PASSTHROUGH_ASPECT, s.passthroughAspect.name)
             .putString(K_PASSTHROUGH_MODE, s.passthroughMode.name)
+            .putString(K_PASSTHROUGH_RESOLUTION, s.passthroughResolution.name)
+            .putString(K_PASSTHROUGH_FPS, s.passthroughFrameRate.name)
+            .putString(K_PASSTHROUGH_ROTATION, s.passthroughRotation.name)
+            .putBoolean(K_PASSTHROUGH_MIRROR, s.passthroughMirror)
+            .putBoolean(K_PASSTHROUGH_HEAD_LOCKED, s.passthroughHeadLocked)
             .apply()
     }
 
@@ -117,5 +141,10 @@ class VrSettingsStore(context: Context) {
         const val K_PASSTHROUGH_WINDOW = "passthroughWindowScale"
         const val K_PASSTHROUGH_ASPECT = "passthroughAspect"
         const val K_PASSTHROUGH_MODE = "passthroughMode"
+        const val K_PASSTHROUGH_RESOLUTION = "passthroughResolution"
+        const val K_PASSTHROUGH_FPS = "passthroughFrameRate"
+        const val K_PASSTHROUGH_ROTATION = "passthroughRotation"
+        const val K_PASSTHROUGH_MIRROR = "passthroughMirror"
+        const val K_PASSTHROUGH_HEAD_LOCKED = "passthroughHeadLocked"
     }
 }

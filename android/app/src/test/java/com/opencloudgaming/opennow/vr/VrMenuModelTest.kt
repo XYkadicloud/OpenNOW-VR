@@ -8,8 +8,9 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        // 23 baseline + 5 passthrough rows + 1 layout-mode row = 29.
-        assertEquals(29, VrMenuModel.items.size)
+        // 23 baseline + 5 passthrough rows + 1 layout-mode row + 4 camera-control rows
+        // (resolution / fps / rotation / mirror) + 1 head-lock row = 34.
+        assertEquals(34, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -298,10 +299,54 @@ class VrMenuModelTest {
     @Test
     fun passthroughRowsArePresentOnTheEnvironmentPage() {
         val env = VrMenuModel.itemsFor(VrMenuModel.pages[3])
-        assertEquals(8, env.size)
+        assertEquals(13, env.size)
         assertEquals(VrMenuItemId.BACKGROUND, env.first().id)
-        assertEquals(VrMenuItemId.PASSTHROUGH_MODE, env.last().id)
+        assertEquals(VrMenuItemId.PASSTHROUGH_HEAD_LOCKED, env.last().id)
         assertTrue(VrMenuModel.display(VrSettings.DEFAULT, VrMenuItemId.PASSTHROUGH_MODE).isNotBlank())
+    }
+
+    @Test
+    fun cameraControlRowsCycleAndNeverTouchTheOnOffShortcut() {
+        val s = VrSettings.DEFAULT
+        val r1 = VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_RESOLUTION)
+        assertEquals(VrPassthroughResolution.P720, r1.passthroughResolution)
+        var cycled = r1
+        repeat(VrPassthroughResolution.values().size) {
+            cycled = VrMenuModel.activate(cycled, VrMenuItemId.PASSTHROUGH_RESOLUTION)
+        }
+        assertEquals(VrPassthroughResolution.P720, cycled.passthroughResolution)
+        assertEquals(VrPassthroughFrameRate.FPS_60,
+            VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FPS).passthroughFrameRate)
+        assertEquals(VrPassthroughFrameRate.FPS_30,
+            VrMenuModel.activate(
+                VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FPS),
+                VrMenuItemId.PASSTHROUGH_FPS,
+            ).passthroughFrameRate)
+        val allRotations = VrPassthroughRotation.values().size
+        var rotated = s
+        repeat(allRotations) { rotated = VrMenuModel.activate(rotated, VrMenuItemId.PASSTHROUGH_ROTATION) }
+        assertEquals(VrPassthroughRotation.AUTO, rotated.passthroughRotation)
+        assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_MIRROR).passthroughMirror)
+        assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_HEAD_LOCKED).passthroughHeadLocked)
+        // These are pure settings. The L2+R2 shortcut flips ONLY passthroughEnabled.
+        assertEquals(false, VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FPS).passthroughEnabled)
+        assertEquals(VrPassthroughMode.OVERLAY,
+            VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_RESOLUTION).passthroughMode)
+    }
+
+    @Test
+    fun cameraControlRowsHaveReadableLabels() {
+        val s = VrSettings.DEFAULT
+        listOf(
+            VrMenuItemId.PASSTHROUGH_RESOLUTION,
+            VrMenuItemId.PASSTHROUGH_FPS,
+            VrMenuItemId.PASSTHROUGH_ROTATION,
+            VrMenuItemId.PASSTHROUGH_MIRROR,
+            VrMenuItemId.PASSTHROUGH_HEAD_LOCKED,
+        ).forEach { id ->
+            assertTrue("$id has no label", VrMenuModel.display(s, id).isNotBlank())
+            assertTrue(VrMenuModel.rawValue(s, id) >= 0f)
+        }
     }
 
     @Test

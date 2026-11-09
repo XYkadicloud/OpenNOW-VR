@@ -65,6 +65,34 @@ enum class VrPassthroughAspect { FOUR_THREE, SIXTEEN_NINE }
  */
 enum class VrPassthroughMode { OVERLAY, CAMERA_MAIN, SIDE_BY_SIDE }
 
+/**
+ * Camera preview RESOLUTION tier, expressed as the picture's SHORT edge in pixels (the usual
+ * "360P / 480P / 720P / 1080P" naming). P480 is the default: it is the tier the user actually
+ * uses on their 30 fps phone and it keeps the preview cheap enough for a low-end VR device, while
+ * P720 / P1080 are offered for faster phones / higher-detail viewers.
+ *
+ * This is a TARGET, not a hardcoded buffer size: VrPassthroughCamera picks the closest size the
+ * device actually advertises in StreamConfigurationMap (preferring an exact aspect match), and the
+ * renderer builds the window quad from that REAL size. So the picture is never stretched even when
+ * the device has no exact 640x480 / 1280x720 preview mode.
+ */
+enum class VrPassthroughResolution(val shortEdge: Int) { P360(360), P480(480), P720(720), P1080(1080) }
+
+/** Target preview frame rate. FPS_30 is the default; FPS_60 is for phones whose AE ranges allow it. */
+enum class VrPassthroughFrameRate(val fps: Int) { FPS_30(30), FPS_60(60) }
+
+/**
+ * Clockwise rotation applied to the camera preview so it reads upright in the VR window.
+ *
+ * AUTO uses the sensor-installation angle reported by the Camera2 Listener (see
+ * VrPassthroughCamera.previewRotationDeg) — the preview buffer is NOT rotated by the display and
+ * getTransformMatrix() contains no rotation, so the sensor angle is the correct baseline. Every
+ * other value is a MANUAL override: sensor orientation and physical viewer mounting differ wildly
+ * between phones, and the user explicitly asked to be able to "自己调一下" against a real photo.
+ * The status panel shows the effective angle so the correct override is one A-press away.
+ */
+enum class VrPassthroughRotation(val degrees: Int) { AUTO(-1), R0(0), R90(90), R180(180), R270(270) }
+
 /** Numeric bounds for every adjustable VR parameter. Kept here so UI, storage and tests agree. */
 object VrRanges {
     const val SCREEN_SCALE_MIN = 0.5f
@@ -235,6 +263,32 @@ data class VrSettings(
     val passthroughAspect: VrPassthroughAspect = VrPassthroughAspect.FOUR_THREE,
     /** Layout of the camera window vs the game picture. See [VrPassthroughMode]. */
     val passthroughMode: VrPassthroughMode = VrPassthroughMode.OVERLAY,
+    /** Preview resolution tier (short edge). See [VrPassthroughResolution]. Default 480P. */
+    val passthroughResolution: VrPassthroughResolution = VrPassthroughResolution.P480,
+    /** Target preview frame rate. See [VrPassthroughFrameRate]. Default 30 (user's phone limit). */
+    val passthroughFrameRate: VrPassthroughFrameRate = VrPassthroughFrameRate.FPS_30,
+    /**
+     * Clockwise preview rotation. AUTO follows the sensor baseline; 0/90/180/270 are manual
+     * overrides for weird sensor orientations / viewer mounting. See [VrPassthroughRotation].
+     */
+    val passthroughRotation: VrPassthroughRotation = VrPassthroughRotation.AUTO,
+    /**
+     * Extra horizontal mirror XOR'd with the camera's automatic front-lens mirroring. Lets the
+     * user flip ANY lens back if the picture reads backwards in their viewer. Default off.
+     */
+    val passthroughMirror: Boolean = false,
+    /**
+     * Whether the camera window is pinned to the viewer's eyes (head-locked) or rigidly attached
+     * to the stream screen (world-locked).
+     *
+     * Default FALSE. On a real device the ORIGINAL head-locked window stayed dead centre while the
+     * world-locked cinema screen drifted with head motion, so the two layers visibly slid against
+     * each other — the "很大的不协调感" report. FALSE makes both layers share the SAME base MVP:
+     * they move together, the window reads as a pane mounted behind the screen, and there is no
+     * relative motion at all. TRUE restores the old "pinned in front of your eyes" behaviour for
+     * viewers who prefer it; it is kept as an option rather than deleted.
+     */
+    val passthroughHeadLocked: Boolean = false,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -271,6 +325,11 @@ data class VrSettings(
         ),
         passthroughAspect = passthroughAspect,
         passthroughMode = passthroughMode,
+        passthroughResolution = passthroughResolution,
+        passthroughFrameRate = passthroughFrameRate,
+        passthroughRotation = passthroughRotation,
+        passthroughMirror = passthroughMirror,
+        passthroughHeadLocked = passthroughHeadLocked,
     )
 
     companion object {
