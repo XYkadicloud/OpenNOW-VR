@@ -52,6 +52,12 @@ fun VrSettingsSection() {
         }
     }
 
+    // CAMERA permission is requested centrally: VrSession.updateSettings() fires the OFF -> ON
+    // edge and calls VrSession.requestCameraPermission (registered by MainActivity). This keeps
+    // ONE dialog for all three entry points (this 2D page, the in-VR 环境 menu, and the L2+R2
+    // shortcut). A denial restores the switch to off and the renderer falls back to black —
+    // no retry loop, no forced permission.
+
     Column(modifier = Modifier.fillMaxWidth()) {
         SettingSwitch(
             label = "VR 模式（半 VR 影院）",
@@ -137,9 +143,82 @@ fun VrSettingsSection() {
         }
 
         SettingSwitch(
+            label = "摄像头透视（Passthrough）",
+            checked = settings.passthroughEnabled,
+            description = "把手机摄像头的实时画面放进 VR，不摘纸盒也能看见周围。手机不是 360° 摄像头，" +
+                "所以画面是一个保持原生 4:3 比例、锁定正前方的居中窗口，窗口外仍是纯黑；串流幕布始终盖在窗口之上，" +
+                "不会被挡住。相机预览缓冲与窗口几何共用同一比例，画面不会被拉伸。需要相机权限；无摄像头、" +
+                "权限被拒或摄像头被占用（例如串流正在录制摄像头）时自动降级回原来的黑底，VR 不会黑屏或崩溃。" +
+                "开启时优先于 360° 背景图，两者不会叠加。",
+        ) { checked ->
+            // VrSession.updateSettings() detects the OFF -> ON edge and asks MainActivity for the
+            // CAMERA permission, so no local launcher is needed here.
+            VrSession.updateSettings(settings.copy(passthroughEnabled = checked))
+        }
+        SettingSwitch(
+            label = "透视使用前置摄像头",
+            checked = settings.passthroughCameraFacing == VrPassthroughFacing.FRONT,
+            description = "默认后置（朝纸盒外侧，看环境）。若你的纸盒没有后置开孔导致画面全黑，改开此项用前置镜头；" +
+                "切换会重新打开摄像头，随时可切回。",
+        ) { checked ->
+            VrSession.updateSettings(
+                settings.copy(
+                    passthroughCameraFacing = if (checked) {
+                        VrPassthroughFacing.FRONT
+                    } else {
+                        VrPassthroughFacing.BACK
+                    },
+                ),
+            )
+        }
+        SettingSwitch(
+            label = "透视窗口使用 16:9 比例",
+            checked = settings.passthroughAspect == VrPassthroughAspect.SIXTEEN_NINE,
+            description = "默认关闭 = 4:3，这是多数手机摄像头的传感器原生比例，不裁切、垂直视野更大，推荐保持。" +
+                "若你的设备只提供 16:9 预览尺寸、或希望窗口更扁，可打开此项；切换时相机预览缓冲与窗口几何会一起改，" +
+                "不会拉伸画面。",
+        ) { checked ->
+            VrSession.updateSettings(
+                settings.copy(
+                    passthroughAspect = if (checked) {
+                        VrPassthroughAspect.SIXTEEN_NINE
+                    } else {
+                        VrPassthroughAspect.FOUR_THREE
+                    },
+                ),
+            )
+        }
+
+        // The three passthrough LAYOUTS are settings, not shortcut steps. L2+R2 only flips the
+        // ON/OFF switch, so the user picks the look here (or in the in-VR 环境 page) and it stays.
+        val modeLabel = when (settings.passthroughMode) {
+            VrPassthroughMode.OVERLAY -> "叠加（摄像头在后、游戏居中覆盖）"
+            VrPassthroughMode.CAMERA_MAIN -> "摄像头为主（游戏缩到右下角小窗）"
+            VrPassthroughMode.SIDE_BY_SIDE -> "双窗口并排（左摄像头 / 右游戏）"
+        }
+        TextButton(onClick = {
+            val next = when (settings.passthroughMode) {
+                VrPassthroughMode.OVERLAY -> VrPassthroughMode.CAMERA_MAIN
+                VrPassthroughMode.CAMERA_MAIN -> VrPassthroughMode.SIDE_BY_SIDE
+                VrPassthroughMode.SIDE_BY_SIDE -> VrPassthroughMode.OVERLAY
+            }
+            VrSession.updateSettings(settings.copy(passthroughMode = next))
+        }) {
+            Text("透视布局：$modeLabel（点击切换）")
+        }
+        Text(
+            "三种样式都保持各自比例、不拉伸：叠加 = 4:3 摄像头窗口在正前方、16:9 游戏幕布居中盖在上面；" +
+                "摄像头为主 = 摄像头放大为主画面、游戏缩成右下角小窗；双窗口并排 = 左摄像头、右游戏互不重叠。" +
+                "长按手柄 L2+R2（LT/RT）只负责开启 / 关闭透视，不会改动这里选好的样式。",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+
+        SettingSwitch(
             label = "360° 背景图（VR 环境）",
             checked = settings.backgroundEnabled,
-            description = "在纯黑背景之外叠加一张全景图作为 VR 环境。默认关闭；关闭时完全不占用额外显存与绘制。",
+            description = "在纯黑背景之外叠加一张全景图作为 VR 环境。默认关闭；关闭时完全不占用额外显存与绘制。" +
+                "摄像头透视开启且有画面时，此项会被自动让位（两者都是背景层，不叠加）。",
         ) { checked ->
             VrSession.updateSettings(settings.copy(backgroundEnabled = checked))
         }
@@ -171,7 +250,10 @@ fun VrSettingsSection() {
                 "「瞳距 / IPD 缩放」1.00x = 完全不改动（SDK 原版画面）；调小左右眼画面靠拢更容易重合、调大分离立体感更强，随时可恢复。该项作用于左右眼的最终画面位移，不改动 SDK 的瞳距/畸变参数。" +
                 "「整体放大」1.00x = 原版输出，默认 1.35x，可一直调到 2.50x；往上调逐步把上下黑边顶满，若还看到大黑边就继续加大。" +
                 "这是纯最终画面后处理，不改 FOV / 投影 / 几何 / shader，双眼始终保持原来的重叠关系；打开 VR 设置菜单时会自动暂停放大，菜单不会被裁。" +
-                "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。",
+                "360° 背景默认关闭，开启后为可选的静态全景环境，不影响串流解码通路。" +
+                "「摄像头透视」是单目实时画面，不是 360° 环境：它以固定窗口显示在正前方（窗口大小、可见度、4:3 / 16:9 比例可调），" +
+                "默认 4:3 是手机传感器的原生比例、不裁切；窗口外保持纯黑，串流画面始终在最上层。" +
+                "窗口随头锁定是因为手机与摄像头一起转，这样才是物理正确的，但左右眼仍有正确视差，看起来像正前方开了一扇窗。",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp),
         )

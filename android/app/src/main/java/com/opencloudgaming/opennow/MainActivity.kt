@@ -46,6 +46,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.opencloudgaming.opennow.vr.VrKeys
 import com.opencloudgaming.opennow.vr.VrModeHost
 import com.opencloudgaming.opennow.vr.VrSession
 
@@ -93,6 +94,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Single CAMERA permission request for the VR passthrough feature. VrSession calls the
+     * registered callback on EVERY OFF -> ON edge of passthroughEnabled, so the 2D settings page,
+     * the in-VR 环境 menu and the L2+R2 shortcut all get permission without duplicating dialogs.
+     * A denial restores the switch to off (the renderer then falls back to pure black), and the
+     * OFF -> ON edge is not re-entered, so there is no retry loop.
+     */
+    private val vrCameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) {
+            VrSession.updateSettings(VrSession.settings.value.copy(passthroughEnabled = false))
+        }
+    }
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(localizedAndroidContext(newBase))
     }
@@ -110,6 +126,11 @@ class MainActivity : ComponentActivity() {
         pendingExternalLaunchIntent = intent
         // VR is an in-Activity overlay; load persisted settings before Compose starts.
         VrSession.attach(this)
+        VrSession.requestCameraPermission = {
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                vrCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
         setContent {
             var ready by remember { mutableStateOf(false) }
             LaunchedEffect(openNowApplication) {
@@ -397,6 +418,19 @@ class MainActivity : ComponentActivity() {
         // Consumed only while the VR menu is open; otherwise the game keeps all stick input.
         if (VrSession.onMotionEvent(event)) return true
         if (VrSession.enabled.value) {
+            // Analogue LT/RT: long-press BOTH to toggle camera passthrough. Most pads report
+            // triggers as MotionEvent axes (AXIS_LTRIGGER/RTRIGGER, or legacy BRAKE/GAS), NOT as
+            // KEYCODE_BUTTON_L2/R2. This does NOT consume the event — the game still receives its
+            // triggers unchanged. The 500 ms hold is兑现 by VrSession's delayed runnable.
+            val l2 = maxOf(
+                event.getAxisValue(VrKeys.AXIS_LTRIGGER),
+                event.getAxisValue(VrKeys.AXIS_BRAKE),
+            )
+            val r2 = maxOf(
+                event.getAxisValue(VrKeys.AXIS_RTRIGGER),
+                event.getAxisValue(VrKeys.AXIS_GAS),
+            )
+            VrSession.onTriggerEvent(l2, r2)
             // No hat/DPAD navigation of the hidden 2D Compose UI while the headset view is up.
             // Same VR game passthrough as dispatchKeyEvent: a stuck streamUiActive must not stop
             // stick / mouse motion from reaching the game once the settings panel is closed.
@@ -570,6 +604,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        // VrSession is an app-wide singleton: drop the Activity-bound callbacks so they never
+        // retain a destroyed Activity (both were registered in onCreate).
+        VrSession.requestCameraPermission = null
+        VrSession.onVrMenuClosed = null
         if (isFinishing) {
             queueStatusNotifier.cancel()
             // Keep the foreground service alive long enough for onTaskRemoved()

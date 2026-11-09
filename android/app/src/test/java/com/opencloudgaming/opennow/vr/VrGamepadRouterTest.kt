@@ -382,4 +382,78 @@ class VrGamepadRouterTest {
         assertEquals(VrCommand.Consumed, press(r, VrKeys.DPAD_UP, 1080L))
         assertEquals(VrCommand.MoveSelection(-1), press(r, VrKeys.DPAD_UP, 1140L))
     }
+
+    // --- L2+R2 passthrough ON/OFF shortcut -------------------------------------------------
+    // User request: the shortcut ONLY opens/closes passthrough. The three layout styles are
+    // settings and are deliberately NOT reachable from a gamepad hold.
+
+    @Test
+    fun l2r2LongPressTogglesPassthroughExactlyOncePerHold() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true }
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1000L))
+        // Timer arms on the INITIAL down that completes the pair, not on the first OS repeat.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 1400L))
+        assertEquals(VrCommand.TogglePassthrough, press(r, VrKeys.BUTTON_R2, 1500L))
+        // The latch survives key-repeat; the repeat stays an ordinary game key.
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1600L))
+        // Releasing EITHER trigger clears the hold, so a fresh deliberate long-press is needed.
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_L2, 1700L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1800L))
+        assertEquals(VrCommand.TogglePassthrough, press(r, VrKeys.BUTTON_L2, 2300L))
+    }
+
+    @Test
+    fun l2r2ShortPressNeverTogglesPassthrough() {
+        val r = VrGamepadRouter().also { it.vrEnabled = true }
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 1000L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_R2, 1100L))
+        assertEquals(VrCommand.PassThrough, release(r, VrKeys.BUTTON_L2, 1100L))
+    }
+
+    @Test
+    fun l2r2IsInertOutsideVrAndWhileTheMenuIsOpen() {
+        val r = VrGamepadRouter()
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 2000L))
+        r.vrEnabled = true
+        r.menuOpen = true
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_L2, 3000L))
+        assertEquals(VrCommand.Consumed, press(r, VrKeys.BUTTON_R2, 4000L))
+    }
+
+    @Test
+    fun heldTriggersDoNotInterfereWithTheL1R1VrEntryCombo() {
+        val r = VrGamepadRouter()
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_R2, 1000L))
+        assertEquals(VrCommand.PassThrough, press(r, VrKeys.BUTTON_L1, 1100L))
+        assertEquals(VrCommand.ToggleVrMode, press(r, VrKeys.BUTTON_R1, 1100L))
+    }
+
+    // --- Analogue LT/RT (the REAL-DEVICE trigger path) --------------------------------------
+    // Most pads report LT/RT as MotionEvent axes, not KEYCODE_BUTTON_L2/R2. VrSession feeds
+    // those values into this pure predicate, so it must be locked down without Android stubs.
+
+    @Test
+    fun analogueTriggerPredicateRequiresBothPastThreshold() {
+        val r = VrGamepadRouter()
+        assertEquals(false, r.passthroughTriggersHeld(0f, 0f))
+        assertEquals(false, r.passthroughTriggersHeld(1f, 0.49f))
+        assertEquals(false, r.passthroughTriggersHeld(0.49f, 1f))
+        assertEquals(true, r.passthroughTriggersHeld(0.5f, 0.5f))
+        assertEquals(true, r.passthroughTriggersHeld(1f, 1f))
+    }
+
+    @Test
+    fun analogueTriggerAxisConstantsMatchAospMotionEvent() {
+        assertEquals(17, VrKeys.AXIS_LTRIGGER)
+        assertEquals(18, VrKeys.AXIS_RTRIGGER)
+        assertEquals("legacy gas", 22, VrKeys.AXIS_GAS)
+        assertEquals("legacy brake", 23, VrKeys.AXIS_BRAKE)
+        assertEquals(0.5f, VrKeys.TRIGGER_PRESS_THRESHOLD, 0f)
+        assertEquals("debounce", 800L, VrKeys.PASSTHROUGH_TOGGLE_DEBOUNCE_MS)
+    }
 }

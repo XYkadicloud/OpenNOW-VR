@@ -90,4 +90,33 @@ class VrSettingsTest {
         val toggled = VrSettings(screenFillMode = VrScreenFillMode.DISTORTED).sanitized()
         assertEquals(VrScreenFillMode.DISTORTED, toggled.screenFillMode)
     }
+
+    @Test
+    fun passthroughDefaultsAreOffNative43AndOverlay() {
+        val s = VrSettings.DEFAULT
+        assertEquals(false, s.passthroughEnabled)
+        assertEquals(VrPassthroughFacing.BACK, s.passthroughCameraFacing)
+        assertEquals(1.00f, s.passthroughOpacity, 0f)
+        assertEquals(0.85f, s.passthroughWindowScale, 0f)
+        assertEquals(VrPassthroughAspect.FOUR_THREE, s.passthroughAspect)
+        assertEquals(VrPassthroughMode.OVERLAY, s.passthroughMode)
+    }
+
+    @Test
+    fun passthroughEnumsSurviveSanitizeAndRangesClamp() {
+        val wild = VrSettings(
+            passthroughEnabled = true,
+            passthroughCameraFacing = VrPassthroughFacing.FRONT,
+            passthroughOpacity = 99f,
+            passthroughWindowScale = -3f,
+            passthroughAspect = VrPassthroughAspect.SIXTEEN_NINE,
+            passthroughMode = VrPassthroughMode.SIDE_BY_SIDE,
+        ).sanitized()
+        assertEquals(true, wild.passthroughEnabled)
+        assertEquals(VrPassthroughFacing.FRONT, wild.passthroughCameraFacing)
+        assertEquals(VrRanges.PASSTHROUGH_OPACITY_MAX, wild.passthroughOpacity, 0f)
+        assertEquals(VrRanges.PASSTHROUGH_WINDOW_MIN, wild.passthroughWindowScale, 0f)
+        assertEquals(VrPassthroughAspect.SIXTEEN_NINE, wild.passthroughAspect)
+        assertEquals(VrPassthroughMode.SIDE_BY_SIDE, wild.passthroughMode)
+    }
 }

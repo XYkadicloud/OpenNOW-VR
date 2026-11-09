@@ -1,6 +1,9 @@
 package com.opencloudgaming.opennow.vr
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -65,8 +68,38 @@ object VrSession {
      */
     @Volatile var onVrMenuClosed: (() -> Unit)? = null
 
+    /**
+     * Set by MainActivity. Requests the CAMERA runtime permission whenever passthrough is switched
+     * OFF -> ON, no matter WHICH entry point did it (2D settings page, in-VR 环境 menu, or the
+     * L2+R2 shortcut). Without this, a shortcut-enabled passthrough on a device that never visited
+     * the 2D settings page would silently fall back to black with no way to grant the permission.
+     * MainActivity clears this in onDestroy() so the singleton never retains a dead Activity.
+     */
+    @Volatile var requestCameraPermission: (() -> Unit)? = null
+
     private var store: VrSettingsStore? = null
     private val router = VrGamepadRouter()
+
+    // Analogue LT/RT long-press. A held trigger axis can STOP emitting MotionEvents once it
+    // bottoms out, so unlike the keycode path there is no OS key-repeat to "兑现" the 500 ms hold.
+    // A main-looper delayed runnable is the clock; releasing a trigger / opening the menu / leaving
+    // VR cancels it. This is the REAL-DEVICE path for most Bluetooth / Xbox / PlayStation pads.
+    // Lazy on purpose: VrSession.recenter() is reachable from the PURE-JVM VrMenuModelTest via
+    // the RECENTER action row. An eager Handler(Looper.getMainLooper()) would initialise at class
+    // load and crash those tests with "Method getMainLooper not mocked". The handler is only
+    // needed on a real device once onTriggerEvent() arms a hold.
+    private val mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
+    private var triggerHoldRunnable: Runnable? = null
+    private var triggerHoldArmed = false
+    /**
+     * Latched once this physical hold has produced its ONE toggle. Some pads keep reporting a
+     * bottomed-out trigger axis at a fixed rate; without this latch those extra MotionEvents would
+     * re-arm the runnable every 500 ms and flip passthrough on/off while the user simply holds the
+     * triggers down. It is cleared ONLY when a trigger is actually released (or VR/menu state
+     * changes), so one deliberate long-press == exactly one ON/OFF.
+     */
+    private var triggerHoldConsumed = false
+    private var lastPassthroughToggleMs = 0L
 
     fun attach(context: Context) {
         store = VrSettingsStore(context)
@@ -81,6 +114,7 @@ object VrSession {
         router.vrEnabled = value
         if (!value) {
             setMenuOpen(false)
+            cancelTriggerHold()
             router.reset()
             VrVideoSurfaceRegistry.clear()
         }
@@ -97,6 +131,8 @@ object VrSession {
         val wasOpen = _menuOpen.value
         _menuOpen.value = value
         router.menuOpen = value
+        // The L2+R2 shortcut is deliberately inert while the settings panel owns input.
+        if (value) cancelTriggerHold()
         if (!value) {
             setEditMode(false)
             // Only the in-VR "panel closed" edge. setEnabled(false) flips _enabled first, so an
@@ -135,10 +171,15 @@ object VrSession {
     }
 
     fun updateSettings(value: VrSettings) {
+        val wasPassthroughEnabled = _settings.value.passthroughEnabled
         val clean = value.sanitized()
         _settings.value = clean
         store?.save(clean)
         syncRouter()
+        // ANY entry point that turns passthrough ON must ensure CAMERA has been granted. On denial
+        // MainActivity restores the switch to off and the renderer falls back to black. Fires only
+        // on the OFF -> ON edge, so re-saving an already-on setting never re-prompts.
+        if (!wasPassthroughEnabled && clean.passthroughEnabled) requestCameraPermission?.invoke()
     }
 
     /**
@@ -200,6 +241,50 @@ object VrSession {
         return handle(command)
     }
 
+    /**
+     * Analogue L2/R2 (LT/RT) long-press, called from MainActivity.dispatchGenericMotionEvent().
+     *
+     * Most pads report the triggers as MotionEvent axes, NOT as KEYCODE_BUTTON_L2/R2. Unlike OS
+     * key-repeat, a held analogue axis may stop producing events once it bottoms out, so the 500 ms
+     * hold is兑现 by a main-looper delayed runnable rather than by waiting for another input event.
+     * Fires exactly ONE TogglePassthrough per deliberate hold; releasing either trigger, opening
+     * the settings menu or leaving VR cancels the pending toggle. The MotionEvent itself is NOT
+     * consumed — the game still receives its triggers unchanged.
+     *
+     * A pad that emits BOTH keycodes and axes is handled by the debounce in handle().
+     */
+    fun onTriggerEvent(l2: Float, r2: Float) {
+        if (!_enabled.value || _menuOpen.value) {
+            cancelTriggerHold()
+            return
+        }
+        if (!router.passthroughTriggersHeld(l2, r2)) {
+            cancelTriggerHold()
+            return
+        }
+        if (triggerHoldArmed || triggerHoldConsumed) return
+        triggerHoldArmed = true
+        val runnable = Runnable {
+            triggerHoldArmed = false
+            triggerHoldConsumed = true
+            triggerHoldRunnable = null
+            if (_enabled.value && !_menuOpen.value) handle(VrCommand.TogglePassthrough)
+        }
+        triggerHoldRunnable = runnable
+        mainHandler.postDelayed(runnable, VrKeys.PASSTHROUGH_LONG_PRESS_MS)
+    }
+
+    private fun cancelTriggerHold() {
+        triggerHoldArmed = false
+        triggerHoldConsumed = false
+        // Only touch the (lazy, Android-only) Handler when a runnable actually exists — which can
+        // only happen after onTriggerEvent() ran on a real device. Keeps JVM tests Android-free.
+        triggerHoldRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            triggerHoldRunnable = null
+        }
+    }
+
     private fun handle(command: VrCommand): Boolean = when (command) {
         VrCommand.PassThrough -> false
         VrCommand.Consumed -> true
@@ -208,6 +293,20 @@ object VrSession {
             // BACK key, or the "退出 VR" ACTION row in the settings panel. A slipped shoulder
             // combo can therefore never terminate a running session.
             if (!_enabled.value) toggle()
+            true
+        }
+        VrCommand.TogglePassthrough -> {
+            // L2+R2 long-press is ONLY an ON/OFF switch (user request). The layout mode is a
+            // pure setting and is deliberately left untouched by this shortcut.
+            // Debounce: a pad may emit BOTH keycodes (VrGamepadRouter.onKey) and analogue axes
+            // (onTriggerEvent) for the same hold. Without this the two paths would each flip the
+            // switch once and cancel each other out (no visible change).
+            val now = SystemClock.uptimeMillis()
+            if (now - lastPassthroughToggleMs >= VrKeys.PASSTHROUGH_TOGGLE_DEBOUNCE_MS) {
+                lastPassthroughToggleMs = now
+                val current = _settings.value
+                updateSettings(current.copy(passthroughEnabled = !current.passthroughEnabled))
+            }
             true
         }
         VrCommand.ToggleMenu -> { setMenuOpen(!_menuOpen.value); true }

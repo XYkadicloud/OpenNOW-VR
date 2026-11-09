@@ -1397,3 +1397,144 @@ if (VrSession.enabled.value) {
 （本轮新增 VR 游戏直通通道的所在文件；r2/r3 打包时它还不是 VR 相关代码，故遗漏）。
 包内源码 / 配置 / 文档共 42 个文件、设置项仍为 20 个、菜单 5 页 23 行。
 
+---
+
+## 20. 2026-11-08 摄像头透视 / Passthrough + 三种布局 + 双扳机快捷键
+
+### 20.1 用户诉求演进（按原话顺序）
+
+1. `添加一个功能透视` —— 语义有歧义，先用一次选项确认，用户选「摄像头透视（Passthrough / 看穿）」。
+2. `说明一下由于不是360°camera，你可以改成固定窗口在中心，或者有什么更好的方式你可以试试，要自己想哦。`
+   —— 明确否定「把单目画面铺满整个 VR 背景」，要求自己给出更好的方案。
+3. `能不能使用4：3的比例` —— 窗口默认比例从 16:9 改为 4:3，并做成 `4:3 / 16:9` 可调项。
+4. `我想问一下你窗口是怎么打开，然后呢，是怎样的一个窗口吗？具体的画面告诉我一下。`
+5. `可以弄个便捷的快捷键开启嘛，使用双扳机按键长按开启，把游戏画面放到后面后台，然后呢摄像头换成摄像头画面。当然啦，你可以改成摄像头，是一个窗口，然后旁边放着呃游戏窗口双窗口模式，这样子也可以。你目前这个模式也可以，做一下可切换。这三种模式做一下。`
+6. `快捷键只负责开启和关闭，具体的样式调整放在设置里面调就好。` —— **重要收敛**：
+   原设计误把 `L2+R2` 做成「循环三种样式」，改为只翻转 `passthroughEnabled` 一个总开关，
+   三种布局纯设置项。
+
+### 20.2 设计取舍（为什么这样做）
+
+- **不伪造 360°**：手机摄像头只有一个约 60–80° 的单目视角。把单帧贴到球面 / 铺满整个背景
+  等于假装存在不存在的方向信息，转头时也无法给出新内容，且画面被拉伸变形。排除。
+- **head-locked 中心窗口**：手机与摄像头在纸盒里刚性连接，用户转头 = 摄像头一起转，
+  所以画面**必须始终在正前方**。MVP 用 `eye.getPerspective() * eye.getEyeFromHead()`
+  但**去掉头部旋转**（`headLockedMvpMatrix`），左右眼因此仍有正确视差，
+  读起来是「正前方开了一扇窗」而不是贴在眼球上的 2D 贴纸。`ipdScale != 1.0` 时同样对
+  `headLockedMvpMatrix` 应用 `VrMatrix4.applyIpdShiftInto()`，保持与幕布一致。
+- **窗口在幕布之下**：`drawEyeScene()` 先画 `drawPassthroughWindow()`，再画串流 quad；
+  游戏画面永远不会透视挡住。窗口外保持纯黑 clear。
+- **4:3 原生比例**：多数手机传感器原生 4:3，16:9 是中心裁切。`SurfaceTexture.setDefaultBufferSize()`
+  （1280×960 / 1280×720）与窗口 quad 的 aspect **同源**，切换比例会重启 Camera2 会话而不是拉伸。
+- **三种布局**都对「摄像头 quad」和「串流 quad 的 model 变换」分别处理，两种画面各自保持
+  比例、绝不拉伸；串流 quad 用 `gameModelMatrix`（纯 scale + translate）经 MVP 变换，
+  不重建几何，因此曲率 / 顶点数 / 面板菜单 quad 全都不受影响。
+- **透明度用 `uBrightness`**：`VIDEO_FRAGMENT_SHADER` 输出 `c.rgb * uBrightness`、
+  `alpha = 1.0`，在 SDK 的纯黑 clear 上等价于 `mix(black, camera, opacity)`。
+  不改 shader、不开 `GL_BLEND`、不改 SDK GL 状态。
+- **透视与 360° 背景互斥**：`drawPassthroughWindow()` 返回 true 时 `drawBackground()` 整段跳过，
+  两个背景层不会双重合成。
+- **失败永远不致命**：第二个 `GL_TEXTURE_EXTERNAL_OES` 创建包在 `try/catch (RuntimeException)`
+  里；无权限 / 无镜头 / 摄像头忙 / `updateTexImage()` 抛错 / 还没有预览帧，统统不画窗口，
+  回退原来的纯黑 / 360° 背景。VR 不会黑屏或崩溃。
+
+### 20.3 本轮实际改动（15 个源码 / 测试文件 + 2 份文档）
+
+| 文件 | 改动 |
+| --- | --- |
+| `VrSettings.kt` | 新增 `VrPassthroughFacing` / `VrPassthroughAspect` / `VrPassthroughMode` 三个枚举、6 个透视字段、`VrRanges` 的 `PASSTHROUGH_OPACITY_*` / `PASSTHROUGH_WINDOW_*`，`sanitized()` 全量钳制 |
+| `VrSettingsStore.kt` | 6 个新 key 的 SharedPreferences 读写（枚举用 `runCatching { valueOf(...) }` 容错，旧数据自动回默认） |
+| `VrMenuModel.kt` | 环境页 `18..25`、快捷页 `26..28`，菜单 23 → **29 行**；新增 6 个 `PASSTHROUGH_*` 行（TOGGLE / ENUM / RANGE），`rawValue` / `display` / `activate` / `toggle` 全覆盖；三模式由 A 循环 |
+| `VrSettingSpec.kt` | 2D 原生数字滑块 11 → **13 个**：`passthroughOpacity`、`passthroughWindowScale` |
+| `VrSettingsSection.kt` | CAMERA 权限说明、透视总开关、前 / 后置镜头、4:3 / 16:9、三布局切换按钮与三段说明文案 |
+| `VrPassthroughCamera.kt`（新增，303 行） | Camera2 + 私有 `HandlerThread`；`start(surface, facing, previewW, previewH)` 幂等、`stop()` / `release()`、`pickCameraId()` 前 / 后置优先再回退任意镜头、`previewRotationDeg()` 按 sensor + display rotation 计算、`onPreviewOrientation(rotationDeg, mirror)` 回调；权限检查用 `ContextCompat.checkSelfPermission` |
+| `VrTheaterRenderer.kt` | 第二个 OES 纹理 + 独立 `SurfaceTexture` / `Surface`；`ptStMatrix` / `ptFrameAvailable` / `ptHasFrame` / `ptUnavailable`；`headLockedMvpMatrix`；`syncPassthrough()` / `configurePassthrough()` / `rebuildPassthroughQuad()` / `drawPassthroughWindow()`；三布局 `gameModelMatrix`；`onRendererShutdown()` 先停相机再释放 GL 对象；常量补齐 |
+| `VrKeys.kt` | `AXIS_LTRIGGER/RTRIGGER/GAS/BRAKE`、`TRIGGER_PRESS_THRESHOLD=0.5f`、`PASSTHROUGH_TOGGLE_DEBOUNCE_MS=800L`、`PASSTHROUGH_TOGGLE_COMBO`、`PASSTHROUGH_LONG_PRESS_MS=500L` |
+| `VrGamepadRouter.kt` | `VrCommand.TogglePassthrough`；keycode 版 `L2+R2` 长按 0→1 边沿 + latch（松开任一 trigger 才清），与 `L1+R1` 完全独立；新增纯函数 `passthroughTriggersHeld(l2, r2)` 供 JVM 单测锁定模拟轴阈值 |
+| `VrSession.kt` | `requestCameraPermission` 回调；`updateSettings()` 在 OFF→ON 边沿统一申请权限；`onTriggerEvent(l2, r2)` 用 lazy `Handler` 的 500 ms 延时时钟兑现模拟扳机长按，`triggerHoldConsumed` latch 保证一次长按只翻转一次，`handle(TogglePassthrough)` 带 800 ms 去抖 |
+| `MainActivity.kt` | `vrCameraPermissionLauncher` 统一 CAMERA 权限；`onCreate` 注册 `requestCameraPermission`；`dispatchGenericMotionEvent()` 读 4 个扳机轴取 max 后调 `onTriggerEvent()`（**不消费**事件，游戏照常收到扳机）；`onDestroy` 清空两个 Activity-bound 回调 |
+| 4 个测试文件 | 菜单 29 行 / 环境页 8 行、三模式循环、透视默认值与边界、2 个新滑块、`L2+R2` 长按一次 / 短按不触发 / 菜单内外 inert / 不与 L1+R1 冲突、模拟轴阈值与 AOSP 常量 |
+
+刻意保持纯 JVM 的 `VrKeys` / `VrGamepadRouter` / `VrSettings` / `VrMenuModel` / `VrSettingSpec`
+不引入任何 `android.*` 依赖；`VrSession` 新增的 `Handler` 用 `by lazy`，否则
+`VrMenuModelTest` 经 `VrSession.recenter()` 触发类加载时会在 JVM 单测里遇到
+`Looper.getMainLooper() not mocked`。
+
+### 20.4 相机 / 渲染链路（GL 线程所有权）
+
+```
+VrModeHost.update → VrTheaterView.applySettings → VrTheaterRenderer.applySettings
+    → 只置 ptConfigDirty = true（相机启停、setDefaultBufferSize、quad 重建都必须在 GL 线程）
+
+onSurfaceCreated: setupVideoTexture() → setupPassthroughTexture() → rebuildPassthroughQuad()
+onNewFrame:      syncPassthrough()
+                   ├─ ptConfigDirty → configurePassthrough()（设置预览尺寸 + cam.start / stop）
+                   │                  rebuildPassthroughQuad()（camera quad + gameModelMatrix + UV 旋转）
+                   └─ ptFrameAvailable → updateTexImage() + getTransformMatrix(ptStMatrix)
+onDrawEye:       计算 headLockedMvpMatrix = perspective * eyeFromHead（无 head rotation）
+drawEyeScene:    drawPassthroughWindow(headLockedMvp) ?: drawBackground(mvp)
+                   → 串流 quad 用 (layoutActive ? headLockedMvp * gameModelMatrix : mvp)
+onRendererShutdown: ptCamera.stop() → release() → releasePassthroughTexture()
+```
+
+`onPreviewOrientation()` 由相机线程回调，只写 `@Volatile` 的 `ptRotationDeg` / `ptMirror`
+并置 `ptConfigDirty`；下一帧 GL 线程把 sensor / display 旋转与前置镜像**烘焙进窗口 UV**
+（纯 CPU buffer 操作），不改 shader。
+
+### 20.5 输入链路（两条路径 + 去抖）
+
+- **keycode 路径**：发 `KEYCODE_BUTTON_L2/R2` 的手柄 → `VrGamepadRouter.onKey()`，
+  沿用已验证可用的 OS key-repeat 作为时钟，组合 0→1 边沿起表、`≥500 ms` 发一次
+  `TogglePassthrough`，`passthroughHoldFired` latch 直到松开任一 trigger 才清。
+- **模拟轴路径（真机主路径）**：主流蓝牙 / Xbox / PlayStation 手柄把 LT/RT 报成
+  `AXIS_LTRIGGER/RTRIGGER`（或旧式 `AXIS_BRAKE/GAS`）而**根本不发 keycode**。
+  `MainActivity.dispatchGenericMotionEvent()` 取两轴 max → `VrSession.onTriggerEvent()`，
+  轴 ≥ `0.5` 视为按下；因为扳机到底后可能停止发 MotionEvent，用 main-looper
+  `Handler.postDelayed(500ms)` 作为时钟，而非等下一个输入事件。
+- **去抖**：同一手柄若同时发 keycode 和轴，两条路径会各翻转一次互相抵消。
+  `handle(TogglePassthrough)` 用 `SystemClock.uptimeMillis()` 做 800 ms 去抖，
+  保证一个物理长按只产生一次可见翻转。菜单打开 / 离开 VR / 松开扳机都会取消 pending 时钟。
+
+### 20.6 权限集中化
+
+`VrSession.updateSettings()` 在 `passthroughEnabled` 的 **OFF→ON 边沿**调用
+`requestCameraPermission?.invoke()`。回调由 `MainActivity.onCreate` 注册，用
+`registerForActivityResult(ActivityResultContracts.RequestPermission())` 统一请求
+`Manifest.permission.CAMERA`；拒绝时 `updateSettings(copy(passthroughEnabled = false))`
+把开关还原，renderer 回退黑底，且不会重新进入 OFF→ON 边沿形成重试循环。
+`AndroidManifest.xml` 原本已有 `<uses-permission android:name="android.permission.CAMERA" />`
+且 `android.hardware.camera` / `.autofocus` 都是 `required="false"`，minSdk 24，Camera2 可用。
+
+### 20.7 验证
+
+- 本机 Python 精确复刻 `VrGamepadRouter.onKey` / `VrMenuModel` 三模式循环 /
+  `passthroughTriggersHeld` / 设置钳制：**42 条断言全绿**。
+- `git diff --check` 无空白错误。
+- 符号级复核：`VrMatrix4.identityInto` / `VrScreenGeometry.halfHeight` / `ProgramHandles.stMatrix` /
+  `VrPassthroughCamera.start()` 签名 / `Listener` 两方法 / `VrTheaterView.applySettings()` /
+  `VrModeHost.update` / CAMERA 权限与 uses-feature 全部匹配，无必红编译点。
+- CI 结论见 `README-VR.md §5.1` 本轮新增行。
+
+### 20.8 待真机复测（CI 抓不到）
+
+1. 三个入口开启透视都能弹出且只弹一次 CAMERA 权限；拒绝后开关自动回到关、画面是黑底不是黑屏；
+2. 真机 `L2+R2` 长按能否开 / 关（**重点**：先确认手柄发的是 keycode 还是模拟轴，
+   `adb logcat` 看 `VrPassthroughCamera` 是否 `preview started`）；短按不应触发；
+3. 窗口是否 head-locked 居中、左右眼视差是否自然；4:3 / 16:9 切换是否不拉伸；
+4. 三种布局的窗口大小 / 位置是否合适（`OVERLAY` 游戏是否确实盖在上面、
+   `CAMERA_MAIN` 游戏小窗是否在右下角、`SIDE_BY_SIDE` 两个窗口是否不重叠）；
+5. 传感器旋转方向：`previewRotationDeg()` + UV 烘焙在某些机型上可能需要 90/180/270 微调；
+   另需确认 `SurfaceTexture.getTransformMatrix()` 会不会与 UV 烘焙造成双重旋转；
+6. 摄像头被串流录制占用时的降级、退出 VR 后相机是否及时释放、反复进出 VR 是否泄漏。
+
+### 20.9 已知技术债
+
+- `previewRotationDeg()` 用的是标准 Camera2 公式 `(sensor - displayDeg + 360) % 360`，
+  但不同 OEM 对 preview buffer 是否自动旋转处理不一致，且 `getTransformMatrix()` 可能已含旋转；
+  真机若方向 / 镜像不对，需要按设备微调（目前没有做成可调项）。
+- `triggerHoldConsumed` 依赖收到「扳机松开」的 MotionEvent 来清除；若某手柄松开时只发
+  keycode UP 而完全不发 axis 事件，需要额外在 `dispatchKeyEvent()` 的 L2/R2 ACTION_UP 上
+  补一次复位（当前主流模拟轴手柄都会发松开事件，风险较低）。
+- 三种布局下串流 quad 用的是 head-locked MVP（与摄像头窗口一致），所以游戏画面在这些模式下
+  也固定在正前方；`OVERLAY` 模式仍用随头转的原 MVP。这是当前的设计选择，不是 bug。
+

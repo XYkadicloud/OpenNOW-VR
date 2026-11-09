@@ -100,4 +100,19 @@ class VrSettingSpecTest {
         assertEquals(260L, updated.menuRepeatMs)
         assertEquals(260f, spec.read(updated), 0f)
     }
+
+    /** The two new passthrough sliders are ordinary specs: bounded, stepped, sanitised. */
+    @Test
+    fun passthroughSlidersExistWithDeclaredBounds() {
+        val opacity = VrSettingSpecs.byId("passthroughOpacity")!!
+        assertEquals(VrRanges.PASSTHROUGH_OPACITY_MIN, opacity.min, 0f)
+        assertEquals(VrRanges.PASSTHROUGH_OPACITY_MAX, opacity.max, 0f)
+        assertEquals(VrRanges.PASSTHROUGH_OPACITY_STEP, opacity.step, 0f)
+        assertEquals(1.00f, opacity.read(VrSettings.DEFAULT), 0f)
+        val window = VrSettingSpecs.byId("passthroughWindowScale")!!
+        assertEquals(VrRanges.PASSTHROUGH_WINDOW_MIN, window.min, 0f)
+        assertEquals(VrRanges.PASSTHROUGH_WINDOW_MAX, window.max, 0f)
+        assertEquals(VrRanges.PASSTHROUGH_WINDOW_STEP, window.step, 0f)
+        assertEquals(0.85f, window.read(VrSettings.DEFAULT), 0f)
+    }
 }

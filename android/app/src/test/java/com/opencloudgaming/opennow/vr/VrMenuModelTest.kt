@@ -8,7 +8,8 @@ class VrMenuModelTest {
 
     @Test
     fun exposesAllRowsWithUniqueIds() {
-        assertEquals(23, VrMenuModel.items.size)
+        // 23 baseline + 5 passthrough rows + 1 layout-mode row = 29.
+        assertEquals(29, VrMenuModel.items.size)
         assertEquals(VrMenuModel.items.size, VrMenuModel.items.map { it.id }.toSet().size)
         assertEquals(VrMenuItemId.SCREEN_SCALE, VrMenuModel.items.first().id)
         assertEquals(VrMenuItemId.EXIT_VR, VrMenuModel.items.last().id)
@@ -290,5 +291,61 @@ class VrMenuModelTest {
         val result = VrMenuModel.confirm(s, VrMenuItemId.RESET_DEFAULTS, editing = true)
         assertEquals(VrSettings.DEFAULT, result.settings)
         assertEquals(false, result.editing)
+    }
+
+    // --- 摄像头透视 / 三种布局样式（纯设置项，不是快捷键步骤） -------------------------------
+
+    @Test
+    fun passthroughRowsArePresentOnTheEnvironmentPage() {
+        val env = VrMenuModel.itemsFor(VrMenuModel.pages[3])
+        assertEquals(8, env.size)
+        assertEquals(VrMenuItemId.BACKGROUND, env.first().id)
+        assertEquals(VrMenuItemId.PASSTHROUGH_MODE, env.last().id)
+        assertTrue(VrMenuModel.display(VrSettings.DEFAULT, VrMenuItemId.PASSTHROUGH_MODE).isNotBlank())
+    }
+
+    @Test
+    fun passthroughModeCyclesThroughTheThreeStyles() {
+        val s = VrSettings.DEFAULT
+        assertEquals(VrPassthroughMode.OVERLAY, s.passthroughMode)
+        val a = VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_MODE)
+        assertEquals(VrPassthroughMode.CAMERA_MAIN, a.passthroughMode)
+        val b = VrMenuModel.activate(a, VrMenuItemId.PASSTHROUGH_MODE)
+        assertEquals(VrPassthroughMode.SIDE_BY_SIDE, b.passthroughMode)
+        val c = VrMenuModel.activate(b, VrMenuItemId.PASSTHROUGH_MODE)
+        assertEquals(VrPassthroughMode.OVERLAY, c.passthroughMode)
+        // The ON/OFF switch and the layout are INDEPENDENT settings: flipping one never moves
+        // the other (this is exactly what the L2+R2 shortcut relies on).
+        val toggled = VrMenuModel.activate(c, VrMenuItemId.PASSTHROUGH)
+        assertEquals(true, toggled.passthroughEnabled)
+        assertEquals(VrPassthroughMode.OVERLAY, toggled.passthroughMode)
+    }
+
+    @Test
+    fun passthroughRangeRowsClampToTheirDeclaredBounds() {
+        val s = VrSettings.DEFAULT
+        assertEquals(false, s.passthroughEnabled)
+        assertEquals(VrPassthroughFacing.BACK, s.passthroughCameraFacing)
+        assertEquals(VrPassthroughAspect.FOUR_THREE, s.passthroughAspect)
+        assertEquals(1.00f, s.passthroughOpacity, 0f)
+        assertEquals(0.85f, s.passthroughWindowScale, 0f)
+        assertEquals(
+            VrRanges.PASSTHROUGH_OPACITY_MAX,
+            VrMenuModel.adjust(s, VrMenuItemId.PASSTHROUGH_OPACITY, 10_000).passthroughOpacity,
+            1e-4f,
+        )
+        assertEquals(
+            VrRanges.PASSTHROUGH_WINDOW_MIN,
+            VrMenuModel.adjust(s, VrMenuItemId.PASSTHROUGH_WINDOW, -10_000).passthroughWindowScale,
+            1e-4f,
+        )
+        assertEquals(
+            VrPassthroughFacing.FRONT,
+            VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_FACING).passthroughCameraFacing,
+        )
+        assertEquals(
+            VrPassthroughAspect.SIXTEEN_NINE,
+            VrMenuModel.activate(s, VrMenuItemId.PASSTHROUGH_ASPECT).passthroughAspect,
+        )
     }
 }

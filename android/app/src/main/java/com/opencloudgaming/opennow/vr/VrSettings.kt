@@ -26,6 +26,45 @@ enum class VrViewerMode { CARDBOARD, SIMULATION }
  */
 enum class VrScreenFillMode { DISTORTED, FILL }
 
+/**
+ * Which phone camera feeds the VR "透视 / Passthrough" background.
+ *
+ * BACK is the default: with a Cardboard viewer the rear lens points outward through the box, so it
+ * is the one that shows the real surroundings. FRONT is offered because many cheap viewers have no
+ * rear cut-out; the front lens then at least shows the user's own side of the room. Switching is a
+ * first-class setting (not a hardcoded choice) because the correct answer depends on the physical
+ * viewer, which the app cannot detect.
+ */
+enum class VrPassthroughFacing { FRONT, BACK }
+
+/**
+ * Aspect ratio of the head-locked passthrough WINDOW. The camera preview buffer and the window
+ * quad always share the SAME ratio, so the picture is never stretched.
+ *
+ * FOUR_THREE is the default on purpose: the vast majority of phone camera sensors are natively
+ * 4:3 (e.g. 4032x3024), and a 16:9 preview is just a cropped/centre-cut of that sensor. Using
+ * 4:3 therefore shows MORE of the real surroundings (especially vertically) with no crop. The
+ * 16:9 option is kept for devices whose Camera2 pipeline only advertises 16:9 preview sizes.
+ */
+enum class VrPassthroughAspect { FOUR_THREE, SIXTEEN_NINE }
+
+/**
+ * How the live camera window and the streamed game picture share the VR view.
+ *
+ *  - OVERLAY (default): camera = centred head-locked window BEHIND the game screen; the game
+ *    stays full-size and on top. This is the original passthrough design.
+ *  - CAMERA_MAIN: camera window is enlarged to the main picture; the stream shrinks to a small
+ *    bottom-right picture-in-picture, i.e. it "goes to the background".
+ *  - SIDE_BY_SIDE: camera window on the LEFT, game window on the RIGHT, two non-overlapping
+ *    windows. Both keep their own aspect ratio (4:3 / 16:9) — nothing is ever stretched.
+ *
+ * The L2+R2 long-press is ONLY an ON/OFF switch for `passthroughEnabled` (user request: "快捷键
+ * 只负责开启和关闭，具体的样式调整放在设置里面调就好"). It NEVER changes this layout, so a
+ * gamepad shortcut cannot silently re-arrange the picture mid-game. The three styles are selected
+ * exclusively in the phone-side settings section and the in-VR menu's 环境 page.
+ */
+enum class VrPassthroughMode { OVERLAY, CAMERA_MAIN, SIDE_BY_SIDE }
+
 /** Numeric bounds for every adjustable VR parameter. Kept here so UI, storage and tests agree. */
 object VrRanges {
     const val SCREEN_SCALE_MIN = 0.5f
@@ -73,6 +112,28 @@ object VrRanges {
     const val ZOOM_MIN = 1.00f
     const val ZOOM_MAX = 2.50f
     const val ZOOM_STEP = 0.02f
+
+    /**
+     * 透视 / Passthrough background visibility. 0.00 = camera picture fully hidden (the original
+     * pure-black background and the optional 360° panorama take over), 1.00 = fully live camera.
+     * Implemented as a brightness multiply on the camera quad over a pure-black clear, which is
+     * visually identical to alpha blending against black but needs NO GL_BLEND, NO shader change
+     * and NO mutation of the Cardboard SDK's GL state.
+     */
+    const val PASSTHROUGH_OPACITY_MIN = 0.00f
+    const val PASSTHROUGH_OPACITY_MAX = 1.00f
+    const val PASSTHROUGH_OPACITY_STEP = 0.05f
+
+    /**
+     * Size of the head-locked camera window (relative to a baseline that already clears the
+     * stream screen). A phone camera is NOT a 360° camera: it has one ~70° view, so its picture
+     * must stay a centred, correctly-proportioned window instead of being stretched over the whole
+     * VR environment. 1.00 is the balanced default; smaller values turn it into a small picture-
+     * in-picture window, larger values let it approach the viewer's full field of view.
+     */
+    const val PASSTHROUGH_WINDOW_MIN = 0.30f
+    const val PASSTHROUGH_WINDOW_MAX = 1.50f
+    const val PASSTHROUGH_WINDOW_STEP = 0.05f
 
     const val REPEAT_MIN_MS = 60L
     const val REPEAT_MAX_MS = 500L
@@ -144,6 +205,36 @@ data class VrSettings(
      * fused, and the settings panel is deliberately NOT zoomed so its rows are never cropped.
      */
     val zoomScale: Float = 1.35f,
+    /**
+     * 摄像头透视 / Passthrough: show the live phone camera as the VR background instead of pure
+     * black, so the surroundings stay visible without taking the headset off. OFF by default —
+     * it needs the CAMERA runtime permission and opens a real camera device, so it must never be
+     * enabled implicitly. While on it takes precedence over the 360° panorama (both are
+     * "background" layers; drawing both would double-composite). If the camera is missing,
+     * permission is denied, or the device is busy (e.g. the stream is recording from it), the
+     * renderer silently falls back to the original black / panorama background — VR never fails.
+     */
+    val passthroughEnabled: Boolean = false,
+    /** Which physical lens to open. Adjustable; see [VrPassthroughFacing]. */
+    val passthroughCameraFacing: VrPassthroughFacing = VrPassthroughFacing.BACK,
+    /** Camera-background visibility, 0.00..1.00. See [VrRanges.PASSTHROUGH_OPACITY_MIN]. */
+    val passthroughOpacity: Float = 1.00f,
+    /**
+     * Size of the head-locked camera WINDOW. The camera is not 360°, so its picture is drawn as a
+     * centred 4:3 (or 16:9, see [passthroughAspect]) window in VR space (eye perspective + IPD
+     * translation, head rotation removed) rather than stretched over the whole environment.
+     * The stream screen is drawn ON TOP of it;
+     * the area outside the window stays pure black. See [VrRanges.PASSTHROUGH_WINDOW_MIN].
+     */
+    val passthroughWindowScale: Float = 0.85f,
+    /**
+     * Aspect of the camera window. 4:3 by default — see [VrPassthroughAspect]. The Camera2 preview
+     * buffer is sized to exactly this ratio and the window quad is built from the same ratio, so
+     * switching it never stretches the picture; it only changes how much of the sensor is visible.
+     */
+    val passthroughAspect: VrPassthroughAspect = VrPassthroughAspect.FOUR_THREE,
+    /** Layout of the camera window vs the game picture. See [VrPassthroughMode]. */
+    val passthroughMode: VrPassthroughMode = VrPassthroughMode.OVERLAY,
 ) {
     /** Clamps every numeric field into its declared range. Idempotent. */
     fun sanitized(): VrSettings = copy(
@@ -170,6 +261,16 @@ data class VrSettings(
         ipdScale = ipdScale.coerceIn(VrRanges.IPD_SCALE_MIN, VrRanges.IPD_SCALE_MAX),
         screenFillMode = screenFillMode,
         zoomScale = zoomScale.coerceIn(VrRanges.ZOOM_MIN, VrRanges.ZOOM_MAX),
+        passthroughEnabled = passthroughEnabled,
+        passthroughCameraFacing = passthroughCameraFacing,
+        passthroughOpacity = passthroughOpacity.coerceIn(
+            VrRanges.PASSTHROUGH_OPACITY_MIN, VrRanges.PASSTHROUGH_OPACITY_MAX,
+        ),
+        passthroughWindowScale = passthroughWindowScale.coerceIn(
+            VrRanges.PASSTHROUGH_WINDOW_MIN, VrRanges.PASSTHROUGH_WINDOW_MAX,
+        ),
+        passthroughAspect = passthroughAspect,
+        passthroughMode = passthroughMode,
     )
 
     companion object {

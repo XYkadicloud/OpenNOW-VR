@@ -28,6 +28,12 @@ enum class VrMenuItemId {
     // 环境
     BACKGROUND,
     BACKGROUND_BRIGHTNESS,
+    PASSTHROUGH,
+    PASSTHROUGH_FACING,
+    PASSTHROUGH_OPACITY,
+    PASSTHROUGH_WINDOW,
+    PASSTHROUGH_ASPECT,
+    PASSTHROUGH_MODE,
     // 快捷
     SCAN_QR,
     RESET_DEFAULTS,
@@ -60,7 +66,7 @@ object VrMenuModel {
         VrMenuPage("display", "画面", "幕布几何、亮度与填充方式"),
         VrMenuPage("view", "观看", "视角模式、头部追踪与辅助线"),
         VrMenuPage("input", "操作", "手柄与菜单响应"),
-        VrMenuPage("env", "环境", "360° 背景"),
+        VrMenuPage("env", "环境", "360° 背景与摄像头透视"),
         VrMenuPage("quick", "快捷", "校准、恢复默认与退出"),
     )
 
@@ -100,19 +106,32 @@ object VrMenuModel {
         VrMenuItem(VrMenuItemId.MENU_REPEAT, "摇杆重复 (ms)", VrMenuItemKind.RANGE,
             VrRanges.REPEAT_MIN_MS.toFloat(), VrRanges.REPEAT_MAX_MS.toFloat(), VrRanges.REPEAT_STEP_MS.toFloat()),
         VrMenuItem(VrMenuItemId.SHOW_STATUS, "显示状态", VrMenuItemKind.TOGGLE),
-        // 环境 (18..19)
+        // 环境 (18..25)
         VrMenuItem(VrMenuItemId.BACKGROUND, "360° 背景图", VrMenuItemKind.TOGGLE),
         VrMenuItem(VrMenuItemId.BACKGROUND_BRIGHTNESS, "背景亮度", VrMenuItemKind.RANGE,
             VrRanges.BACKGROUND_BRIGHTNESS_MIN, VrRanges.BACKGROUND_BRIGHTNESS_MAX,
             VrRanges.BACKGROUND_BRIGHTNESS_STEP),
-        // 快捷 (20..22)
+        VrMenuItem(VrMenuItemId.PASSTHROUGH, "摄像头透视", VrMenuItemKind.TOGGLE),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_FACING, "透视摄像头", VrMenuItemKind.ENUM),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_OPACITY, "透视可见度", VrMenuItemKind.RANGE,
+            VrRanges.PASSTHROUGH_OPACITY_MIN, VrRanges.PASSTHROUGH_OPACITY_MAX,
+            VrRanges.PASSTHROUGH_OPACITY_STEP),
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_WINDOW, "透视窗口大小", VrMenuItemKind.RANGE,
+            VrRanges.PASSTHROUGH_WINDOW_MIN, VrRanges.PASSTHROUGH_WINDOW_MAX,
+            VrRanges.PASSTHROUGH_WINDOW_STEP),
+        // Phone sensors are natively 4:3; 16:9 is a crop. Default 4:3, switchable per device.
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_ASPECT, "透视窗口比例", VrMenuItemKind.ENUM),
+        // Layout is a SETTING, never a shortcut step: L2+R2 long-press only flips the ON/OFF
+        // switch above. A cycles these three styles here and on the phone-side settings page.
+        VrMenuItem(VrMenuItemId.PASSTHROUGH_MODE, "透视布局", VrMenuItemKind.ENUM),
+        // 快捷 (26..28)
         VrMenuItem(VrMenuItemId.SCAN_QR, "纸盒扫码校准", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.RESET_DEFAULTS, "恢复默认", VrMenuItemKind.ACTION),
         VrMenuItem(VrMenuItemId.EXIT_VR, "退出 VR", VrMenuItemKind.ACTION),
     )
 
     /** Index range of each page inside [items]. Verified at class-init so a bad split fails fast. */
-    private val pageRanges: List<IntRange> = listOf(0..9, 10..14, 15..17, 18..19, 20..22)
+    private val pageRanges: List<IntRange> = listOf(0..9, 10..14, 15..17, 18..25, 26..28)
 
     init {
         require(pageRanges.size == pages.size) { "page count mismatch" }
@@ -159,6 +178,17 @@ object VrMenuModel {
         VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) 1f else 0f
         VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) 1f else 0f
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> settings.backgroundBrightness
+        VrMenuItemId.PASSTHROUGH -> if (settings.passthroughEnabled) 1f else 0f
+        VrMenuItemId.PASSTHROUGH_FACING -> if (settings.passthroughCameraFacing == VrPassthroughFacing.BACK) 0f else 1f
+        VrMenuItemId.PASSTHROUGH_OPACITY -> settings.passthroughOpacity
+        VrMenuItemId.PASSTHROUGH_WINDOW -> settings.passthroughWindowScale
+        VrMenuItemId.PASSTHROUGH_ASPECT ->
+            if (settings.passthroughAspect == VrPassthroughAspect.FOUR_THREE) 0f else 1f
+        VrMenuItemId.PASSTHROUGH_MODE -> when (settings.passthroughMode) {
+            VrPassthroughMode.OVERLAY -> 0f
+            VrPassthroughMode.CAMERA_MAIN -> 0.5f
+            VrPassthroughMode.SIDE_BY_SIDE -> 1f
+        }
         else -> 0f
     }
 
@@ -186,6 +216,21 @@ object VrMenuModel {
         VrMenuItemId.CENTER_ALIGN_LINE -> if (settings.showCenterAlignmentLine) "开" else "关"
         VrMenuItemId.BACKGROUND -> if (settings.backgroundEnabled) "开" else "关"
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> String.format(Locale.US, "%.2f", settings.backgroundBrightness)
+        VrMenuItemId.PASSTHROUGH -> if (settings.passthroughEnabled) "开" else "关"
+        VrMenuItemId.PASSTHROUGH_FACING -> if (settings.passthroughCameraFacing == VrPassthroughFacing.BACK) {
+            "后置"
+        } else {
+            "前置"
+        }
+        VrMenuItemId.PASSTHROUGH_OPACITY -> String.format(Locale.US, "%.2f", settings.passthroughOpacity)
+        VrMenuItemId.PASSTHROUGH_WINDOW -> String.format(Locale.US, "%.2f x", settings.passthroughWindowScale)
+        VrMenuItemId.PASSTHROUGH_ASPECT ->
+            if (settings.passthroughAspect == VrPassthroughAspect.FOUR_THREE) "4:3（原生）" else "16:9"
+        VrMenuItemId.PASSTHROUGH_MODE -> when (settings.passthroughMode) {
+            VrPassthroughMode.OVERLAY -> "叠加（游戏在上）"
+            VrPassthroughMode.CAMERA_MAIN -> "摄像头为主·游戏小窗"
+            VrPassthroughMode.SIDE_BY_SIDE -> "双窗口并排"
+        }
         VrMenuItemId.RECENTER -> "按 A 执行"
         VrMenuItemId.SCAN_QR -> "按 A 执行"
         VrMenuItemId.RESET_DEFAULTS -> "按 A 执行"
@@ -240,7 +285,9 @@ object VrMenuModel {
         VrMenuItemId.SCREEN_FILL_MODE, VrMenuItemId.VIEWER_MODE -> toggle(settings, id)
         VrMenuItemId.HEAD_TRACKING, VrMenuItemId.SHOW_STATUS,
         VrMenuItemId.HORIZONTAL_MIRROR, VrMenuItemId.VERTICAL_FLIP,
-        VrMenuItemId.CENTER_ALIGN_LINE, VrMenuItemId.BACKGROUND -> toggle(settings, id)
+        VrMenuItemId.CENTER_ALIGN_LINE, VrMenuItemId.BACKGROUND,
+        VrMenuItemId.PASSTHROUGH, VrMenuItemId.PASSTHROUGH_FACING,
+        VrMenuItemId.PASSTHROUGH_ASPECT, VrMenuItemId.PASSTHROUGH_MODE -> toggle(settings, id)
         else -> settings
     }.sanitized()
 
@@ -265,6 +312,30 @@ object VrMenuModel {
         VrMenuItemId.VERTICAL_FLIP -> settings.copy(verticalFlip = !settings.verticalFlip)
         VrMenuItemId.CENTER_ALIGN_LINE -> settings.copy(showCenterAlignmentLine = !settings.showCenterAlignmentLine)
         VrMenuItemId.BACKGROUND -> settings.copy(backgroundEnabled = !settings.backgroundEnabled)
+        VrMenuItemId.PASSTHROUGH -> settings.copy(passthroughEnabled = !settings.passthroughEnabled)
+        VrMenuItemId.PASSTHROUGH_FACING -> settings.copy(
+            passthroughCameraFacing = if (settings.passthroughCameraFacing == VrPassthroughFacing.BACK) {
+                VrPassthroughFacing.FRONT
+            } else {
+                VrPassthroughFacing.BACK
+            },
+        )
+        VrMenuItemId.PASSTHROUGH_ASPECT -> settings.copy(
+            passthroughAspect = if (settings.passthroughAspect == VrPassthroughAspect.FOUR_THREE) {
+                VrPassthroughAspect.SIXTEEN_NINE
+            } else {
+                VrPassthroughAspect.FOUR_THREE
+            },
+        )
+        // Three styles, cycled by A here and by the phone-side button. The L2+R2 shortcut does
+        // NOT cycle this — it only flips passthroughEnabled.
+        VrMenuItemId.PASSTHROUGH_MODE -> settings.copy(
+            passthroughMode = when (settings.passthroughMode) {
+                VrPassthroughMode.OVERLAY -> VrPassthroughMode.CAMERA_MAIN
+                VrPassthroughMode.CAMERA_MAIN -> VrPassthroughMode.SIDE_BY_SIDE
+                VrPassthroughMode.SIDE_BY_SIDE -> VrPassthroughMode.OVERLAY
+            },
+        )
         else -> settings
     }
 
@@ -280,6 +351,8 @@ object VrMenuModel {
         VrMenuItemId.GAMEPAD_DEAD_ZONE -> settings.copy(gamepadDeadZone = value)
         VrMenuItemId.MENU_REPEAT -> settings.copy(menuRepeatMs = value.toLong())
         VrMenuItemId.BACKGROUND_BRIGHTNESS -> settings.copy(backgroundBrightness = value)
+        VrMenuItemId.PASSTHROUGH_OPACITY -> settings.copy(passthroughOpacity = value)
+        VrMenuItemId.PASSTHROUGH_WINDOW -> settings.copy(passthroughWindowScale = value)
         else -> settings
     }
 }

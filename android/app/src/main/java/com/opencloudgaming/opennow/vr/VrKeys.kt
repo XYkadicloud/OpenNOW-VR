@@ -49,6 +49,26 @@ object VrKeys {
     const val AXIS_HAT_Y = 16
 
     /**
+     * Analogue triggers. Most Bluetooth / Xbox / PlayStation pads report LT/RT as
+     * AXIS_LTRIGGER / AXIS_RTRIGGER (or the legacy AXIS_BRAKE / AXIS_GAS) inside a MotionEvent
+     * and NEVER emit KEYCODE_BUTTON_L2 / R2. VrSession.onTriggerEvent() reads these so the
+     * L2+R2 long-press works on real devices as well as on pads that DO send keycodes (handled by
+     * VrGamepadRouter.onKey). Keeping them as plain Int constants preserves JVM-only unit tests.
+     */
+    const val AXIS_LTRIGGER = 17
+    const val AXIS_RTRIGGER = 18
+    const val AXIS_GAS = 22
+    const val AXIS_BRAKE = 23
+    /** A trigger counts as "pressed" once its analogue value crosses this threshold. */
+    const val TRIGGER_PRESS_THRESHOLD = 0.5f
+    /**
+     * Guards against a pad that emits BOTH keycodes and axes for the same long-press: the keycode
+     * path (VrGamepadRouter) and the axis path (VrSession) would otherwise each fire one toggle
+     * and immediately cancel each other out.
+     */
+    const val PASSTHROUGH_TOGGLE_DEBOUNCE_MS = 800L
+
+    /**
      * L1+R1 is ENTRY-ONLY now (user request): it opens VR when VR is off, but can no longer kick
      * the user out of an active session. Exiting is deliberately explicit — the phone's system
      * BACK key, or the "退出 VR" row in the in-VR settings panel. START+SELECT remains reserved
@@ -68,6 +88,18 @@ object VrKeys {
 
     /** Single press closes the panel while it is open. */
     val MENU_CLOSE_KEYS = intArrayOf(BUTTON_SELECT, BUTTON_START, BUTTON_MODE)
+
+    /**
+     * L2+R2 (LT/RT) long-press is a DEDICATED ON/OFF switch for camera passthrough. It only flips
+     * `VrSettings.passthroughEnabled`; the three layout styles are settings, never shortcut steps.
+     * These two trigger buttons are otherwise unused in VR (L1+R1 enters VR, LB/RB page the menu,
+     * START+SELECT / MODE long-press opens the menu), so there is no key conflict.
+     *
+     * Like the menu long-press, it relies on OS key-repeat as its clock — the same mechanism that
+     * is already verified working on the user's real device for START+SELECT.
+     */
+    val PASSTHROUGH_TOGGLE_COMBO = intArrayOf(BUTTON_L2, BUTTON_R2)
+    const val PASSTHROUGH_LONG_PRESS_MS = 500L
 
     /**
      * Second-level PAGE navigation lives on the shoulder buttons (user request): LB = previous

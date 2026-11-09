@@ -25,6 +25,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.Locale
 import java.util.Random
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -213,6 +214,74 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     private var logLastZoomSkip: String? = null
     private var logLastZoomActive = false
 
+    // -----------------------------------------------------------------------------------------
+    // 摄像头透视 / Passthrough — a HEAD-LOCKED WINDOW, deliberately NOT a 360° environment.
+    //
+    // A phone camera has ONE ~70° view, not a panorama. Stretching a single frame over the whole
+    // VR sphere would fake information that does not exist and warp the picture. Instead the live
+    // camera is drawn as ONE centred, correctly-proportioned (4:3 by default) window:
+    //   * HEAD-LOCKED: its MVP uses eye perspective + eyeFromHead but NO head rotation. The phone
+    //     and its camera are rigidly fixed inside the Cardboard viewer, so when the user turns
+    //     their head the camera turns too — the picture must stay straight ahead. Keeping the eye
+    //     matrices (minus rotation) gives proper binocular parallax, so it reads as "a window in
+    //     front of me", not a 2D sticker glued to the eyeball.
+    //   * BEHIND the stream screen: drawn first, at a greater distance; the game picture is
+    //     composited on top and is never obscured. Everything outside the window stays pure black.
+    //   * NO shader change / NO GL_BLEND / NO SDK state mutation: it reuses the existing
+    //     VIDEO_FRAGMENT_SHADER (samplerExternalOES + uSTMatrix). Opacity is uBrightness, which
+    //     over the pure-black clear is exactly mix(black, camera, opacity).
+    //   * Camera2 owns a private HandlerThread; every GL object is created/updated/released on the
+    //     GL thread via onSurfaceCreated / onNewFrame / onRendererShutdown. Failure of any kind
+    //     (no permission, no lens, busy device) simply stops drawing the window and the original
+    //     black / 360° background takes over — VR can never black-screen because of passthrough.
+    // -----------------------------------------------------------------------------------------
+    private var ptCamera: VrPassthroughCamera? = null
+    private var ptTextureId = 0
+    private var ptSurfaceTexture: SurfaceTexture? = null
+    private var ptSurface: Surface? = null
+    private val ptStMatrix = FloatArray(16).also {
+        it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f
+    }
+    private val ptFrameAvailable = AtomicBoolean(false)
+    private val ptHasFrame = AtomicBoolean(false)
+    private val ptUnavailable = AtomicBoolean(false)
+    @Volatile private var ptRotationDeg = 0
+    @Volatile private var ptMirror = false
+    /** Bumped by applySettings() and by the camera's orientation callback (GL thread consumes). */
+    @Volatile private var ptConfigDirty = true
+    private var ptAppliedPreviewW = 0
+    private var ptAppliedPreviewH = 0
+    private val ptPositionBuffer: FloatBuffer = newFloatBuffer(12)
+    private val ptTexCoordBuffer: FloatBuffer = newFloatBuffer(8)
+    /** Head-LOCKED MVP: eye perspective * eyeFromHead, with the head rotation removed. */
+    private val headLockedMvpMatrix = FloatArray(16)
+    /**
+     * Model transform applied to the EXISTING stream quad in CAMERA_MAIN / SIDE_BY_SIDE. Identity
+     * for OVERLAY. Applied via MVP (not by rebuilding geometry) so curvature, vertex count and the
+     * panel/menu quad are all untouched. Written on the GL thread by rebuildPassthroughQuad().
+     */
+    private val gameModelMatrix = FloatArray(16).also {
+        it[0] = 1f; it[5] = 1f; it[10] = 1f; it[15] = 1f
+    }
+    private val gameMvpMatrix = FloatArray(16)
+    /** Stream aspect last used for the layout; a change forces rebuildPassthroughQuad(). */
+    private var ptAppliedGameAspect = 0f
+
+    private val ptListener = object : VrPassthroughCamera.Listener {
+        override fun onUnavailable(reason: String) {
+            ptUnavailable.set(true)
+            ptHasFrame.set(false)
+            // Called on the camera thread; only volatile/atomic state is touched here.
+            Log.w(TAG, "passthrough unavailable ($reason) -> black / 360° background fallback")
+        }
+
+        override fun onPreviewOrientation(rotationDeg: Int, mirror: Boolean) {
+            ptRotationDeg = rotationDeg
+            ptMirror = mirror
+            ptConfigDirty = true
+        }
+    }
+
     // Preallocated paints for the modern two-level menu. Allocated once in createPanelResources();
     // drawMenu()/drawStatus() only re-assign colours, so the render loop stays allocation-free.
     private var menuCardPaint: Paint? = null
@@ -244,6 +313,18 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             next.backgroundImageUri != prev.backgroundImageUri ||
             next.backgroundBrightness != prev.backgroundBrightness
         if (bgChanged) bgDirty = true
+        // Passthrough: camera (re)start, preview buffer size and the window quad all need the GL
+        // thread, so applySettings() only raises ONE flag. A screenScale / distance change also
+        // rebuilds the window quad so it keeps its size relationship with the stream screen.
+        val passthroughChanged = next.passthroughEnabled != prev.passthroughEnabled ||
+            next.passthroughCameraFacing != prev.passthroughCameraFacing ||
+            next.passthroughOpacity != prev.passthroughOpacity ||
+            next.passthroughWindowScale != prev.passthroughWindowScale ||
+            next.passthroughAspect != prev.passthroughAspect ||
+            next.passthroughMode != prev.passthroughMode ||
+            next.screenScale != prev.screenScale ||
+            next.screenDistanceMeters != prev.screenDistanceMeters
+        if (passthroughChanged) ptConfigDirty = true
     }
 
     /** Called from VrSession when user triggers "重置中心点". Runs on GL thread via renderer callback. */
@@ -279,10 +360,13 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
         panelTextureId = createPanelResources()
         setupVideoTexture()
+        setupPassthroughTexture()
         rebuildMesh()
         buildBackgroundMesh()
         createLineResources()
         createZoomQuad()
+        rebuildPassthroughQuad(settings)
+        ptConfigDirty = true
         meshDirty = false
         // Draw the panel once up front so the very first frame is never an uninitialised texture.
         uploadPanel()
@@ -295,6 +379,9 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
 
     override fun onNewFrame(headTransform: HeadTransform) {
         headTransform.getQuaternion(headQuaternion, 0)
+        // Camera work (start/stop, buffer size, updateTexImage) MUST happen on this GL thread.
+        // onNewFrame runs exactly once per frame BEFORE both onDrawEye() calls.
+        syncPassthrough()
         if (VrVideoSurfaceRegistry.consumeFrameAvailable()) {
             if (!logFirstFrameAvailable) {
                 logFirstFrameAvailable = true
@@ -386,6 +473,14 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         }
         VrMatrix4.multiplyInto(viewMatrix, eye.getEyeFromHead(), head)
         VrMatrix4.multiplyInto(mvpMatrix, eye.getPerspective(0.1f, 100f), viewMatrix)
+        // Head-LOCKED passthrough window: keep eye perspective + eyeFromHead (so the two eyes get
+        // correct parallax) but drop the head rotation. The phone and its camera rotate together
+        // inside the viewer, so the window must stay straight ahead while the user looks around.
+        VrMatrix4.multiplyInto(
+            headLockedMvpMatrix,
+            eye.getPerspective(0.1f, 100f),
+            eye.getEyeFromHead(),
+        )
         if (current.ipdScale != 1.0f) {
             val eyeSign = when (eye.getEyeType()) {
                 CardboardView.Eye.LEFT -> 1f
@@ -393,6 +488,7 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
                 else -> 0f
             }
             VrMatrix4.applyIpdShiftInto(mvpMatrix, current.ipdScale, eyeSign)
+            VrMatrix4.applyIpdShiftInto(headLockedMvpMatrix, current.ipdScale, eyeSign)
         }
 
         val showPanel = useVideo || menuOpen || current.showStatus
@@ -424,28 +520,48 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             )
         }
 
-        drawEyeScene(mvpMatrix, current, useVideo, drawPanel, allowBackgroundLoad = true)
+        drawEyeScene(mvpMatrix, headLockedMvpMatrix, current, useVideo, drawPanel, allowBackgroundLoad = true)
     }
 
     /**
-     * Draws ONE eye's complete scene (360° sphere first, then the flat cinema quad) with the given
-     * MVP into the Cardboard SDK's FBO. This is ONLY ever called from onDrawEye(): the "单纯放大"
-     * FILL mode does not re-render the scene, it zooms the finished composite afterwards.
+     * Draws ONE eye's complete scene (passthrough window OR 360° sphere first, then the flat
+     * cinema quad) with the given MVP into the Cardboard SDK's FBO. This is ONLY ever called from
+     * onDrawEye(): the "单纯放大" FILL mode does not re-render the scene, it zooms the finished
+     * composite afterwards.
+     *
+     * [headLockedMvp] is the transform for the camera window (eye matrices, no head rotation).
      */
     private fun drawEyeScene(
         mvp: FloatArray,
+        headLockedMvp: FloatArray,
         s: VrSettings,
         useVideo: Boolean,
         drawPanel: Boolean,
         allowBackgroundLoad: Boolean,
     ) {
-        drawBackground(s, mvp, allowBackgroundLoad)
+        // Both are BACKGROUND layers; never double-composite them. If passthrough is on but the
+        // camera has no frame yet (or failed), fall back to the panorama / pure black as before.
+        val passthroughDrawn = drawPassthroughWindow(headLockedMvp, s)
+        if (!passthroughDrawn) drawBackground(s, mvp, allowBackgroundLoad)
         if (!drawPanel) return
         val handles = (if (useVideo) video else panel) ?: return
         if (vertexCount == 0) return
 
+        // In CAMERA_MAIN / SIDE_BY_SIDE the stream quad becomes a PiP / side window. Gated on
+        // passthroughDrawn so a camera failure (no permission / busy lens) falls back to the
+        // ORIGINAL full-size picture instead of leaving a tiny game window over pure black.
+        // The panel and menu (useVideo == false) always keep the original MVP — never shrunk.
+        val layoutActive = useVideo && passthroughDrawn &&
+            s.passthroughMode != VrPassthroughMode.OVERLAY
+        val streamMvp = if (layoutActive) {
+            VrMatrix4.multiplyInto(gameMvpMatrix, headLockedMvp, gameModelMatrix)
+            gameMvpMatrix
+        } else {
+            mvp
+        }
+
         GLES20.glUseProgram(handles.program)
-        GLES20.glUniformMatrix4fv(handles.mvp, 1, false, mvp, 0)
+        GLES20.glUniformMatrix4fv(handles.mvp, 1, false, streamMvp, 0)
         GLES20.glUniform1f(handles.brightness, s.brightness)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glUniform1i(handles.texture, 0)
@@ -745,6 +861,19 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     override fun onRendererShutdown() {
         Log.d(TAG, "onRendererShutdown: releasing GL resources")
         VrVideoSurfaceRegistry.clear()
+        // Stop the camera producer BEFORE tearing down the GL objects it feeds. release() posts a
+        // stop to the camera thread and quits it; the stream's own camera recording can then take
+        // the device back as soon as VR exits.
+        ptCamera?.stop()
+        ptCamera?.release()
+        ptCamera = null
+        releasePassthroughTexture()
+        ptUnavailable.set(false)
+        ptRotationDeg = 0
+        ptMirror = false
+        ptAppliedGameAspect = 0f
+        VrMatrix4.identityInto(gameModelMatrix)
+        ptConfigDirty = true
         releaseVideoTexture()
         deleteBackgroundTexture()
         bgPositionBuffer = null
@@ -928,6 +1057,262 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             videoTextureId = 0
         }
         hasVideoFrame = false
+    }
+
+    /**
+     * Creates a SECOND external-OES texture for the passthrough camera. It is deliberately
+     * separate from the decoder's video texture: two SurfaceTextures / producers must never share
+     * one GL texture name or fight over updateTexImage(). The already-linked VIDEO program is
+     * reused unchanged.
+     */
+    private fun setupPassthroughTexture() {
+        releasePassthroughTexture()
+        if (video == null) return // no external-OES on this driver -> passthrough stays unavailable
+        // A driver that cannot create a SECOND external-OES SurfaceTexture must never kill the GL
+        // thread. On any failure we release everything and leave ptTextureId == 0, so
+        // drawPassthroughWindow() simply returns false and the original black / 360° background
+        // takes over. This is part of the "passthrough failure is never fatal" contract.
+        try {
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            ptTextureId = ids[0]
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, ptTextureId)
+            GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR,
+            )
+            GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR,
+            )
+            GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE,
+            )
+            GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE,
+            )
+            val texture = SurfaceTexture(ptTextureId)
+            // Only flips an AtomicBoolean. A camera preview at 30 fps must never enqueue 30
+            // messages per second onto the main looper.
+            texture.setOnFrameAvailableListener { ptFrameAvailable.set(true) }
+            ptSurfaceTexture = texture
+            ptSurface = Surface(texture)
+            ptConfigDirty = true
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "passthrough texture setup failed; window disabled, black background kept", e)
+            releasePassthroughTexture()
+        }
+    }
+
+    private fun releasePassthroughTexture() {
+        ptSurface?.release()
+        ptSurface = null
+        ptSurfaceTexture?.release()
+        ptSurfaceTexture = null
+        if (ptTextureId != 0) {
+            GLES20.glDeleteTextures(1, intArrayOf(ptTextureId), 0)
+            ptTextureId = 0
+        }
+        ptAppliedPreviewW = 0
+        ptAppliedPreviewH = 0
+        ptFrameAvailable.set(false)
+        ptHasFrame.set(false)
+    }
+
+    /**
+     * GL-thread-only. Applies settings to the camera, keeps the preview buffer size in sync with
+     * the chosen aspect, and consumes newly arrived camera frames BEFORE both onDrawEye() calls.
+     */
+    private fun syncPassthrough() {
+        val s = settings
+        // The stream's real decoded aspect is part of the SIDE_BY_SIDE / PiP layout maths. A
+        // resolution change does not go through applySettings(), so detect it here on the GL thread.
+        if (VrSession.videoAspect != ptAppliedGameAspect) ptConfigDirty = true
+        if (ptConfigDirty) {
+            ptConfigDirty = false
+            configurePassthrough(s)
+            rebuildPassthroughQuad(s)
+        }
+        if (ptFrameAvailable.getAndSet(false)) {
+            val st = ptSurfaceTexture
+            if (st != null && ptTextureId != 0) {
+                try {
+                    st.updateTexImage()
+                    st.getTransformMatrix(ptStMatrix)
+                    ptHasFrame.set(true)
+                    ptUnavailable.set(false)
+                } catch (e: RuntimeException) {
+                    Log.w(TAG, "passthrough updateTexImage() threw; window disabled this frame", e)
+                    ptHasFrame.set(false)
+                }
+            }
+        }
+    }
+
+    /**
+     * Camera2 sizes its output stream from SurfaceTexture.setDefaultBufferSize(), so it MUST be
+     * applied here (the renderer owns the SurfaceTexture) BEFORE the capture session is created.
+     * start() is idempotent on (facing, surface, previewW, previewH); a 4:3 <-> 16:9 change alters
+     * the size and therefore correctly forces a session restart instead of stretching the stream.
+     */
+    private fun configurePassthrough(s: VrSettings) {
+        val fourThree = s.passthroughAspect == VrPassthroughAspect.FOUR_THREE
+        val pw = if (fourThree) PASSTHROUGH_PREVIEW_W_4_3 else PASSTHROUGH_PREVIEW_W_16_9
+        val ph = if (fourThree) PASSTHROUGH_PREVIEW_H_4_3 else PASSTHROUGH_PREVIEW_H_16_9
+        val st = ptSurfaceTexture
+        if (st != null && (ptAppliedPreviewW != pw || ptAppliedPreviewH != ph)) {
+            st.setDefaultBufferSize(pw, ph)
+            ptAppliedPreviewW = pw
+            ptAppliedPreviewH = ph
+        }
+        val surface = ptSurface
+        if (surface == null || video == null || ptTextureId == 0 ||
+            !s.passthroughEnabled || s.passthroughOpacity <= 0f
+        ) {
+            ptCamera?.stop()
+            ptHasFrame.set(false)
+            return
+        }
+        val cam = ptCamera ?: VrPassthroughCamera(context, ptListener).also { ptCamera = it }
+        cam.start(surface, s.passthroughCameraFacing, pw, ph)
+    }
+
+    /**
+     * Builds the head-locked camera window quad AND the stream quad's model transform for the
+     * three selectable layouts. Only called when a setting / camera orientation / stream aspect
+     * changed, NEVER per frame, so the small temp arrays here are harmless.
+     *
+     * All layout numbers are expressed in the "equivalent z = -d1 plane" so they map directly
+     * onto VrScreenGeometry's stream quad. The camera quad lives further away (z = -d2), so BOTH
+     * its size and its centre offset are multiplied by d2/d1 to preserve ANGULAR size/position.
+     * Nothing is ever stretched: the camera window keeps its 4:3 / 16:9 ratio and the stream quad
+     * keeps VrSession.videoAspect in every mode.
+     */
+    private fun rebuildPassthroughQuad(s: VrSettings) {
+        val cameraAspect = if (s.passthroughAspect == VrPassthroughAspect.FOUR_THREE) {
+            PASSTHROUGH_ASPECT_4_3
+        } else {
+            PASSTHROUGH_ASPECT_16_9
+        }
+        val gameAspect = VrSession.videoAspect.coerceIn(0.25f, 8f)
+        ptAppliedGameAspect = gameAspect
+        val d1 = s.screenDistanceMeters.coerceAtLeast(0.1f)
+        val d2 = d1 + PASSTHROUGH_WINDOW_DEPTH_M
+        val depthScale = d2 / d1
+        val u = VrScreenGeometry.halfHeight(s.screenScale)
+        val scale = s.passthroughWindowScale
+
+        // Defaults = OVERLAY. Every branch explicitly sets all fields it needs; initialising them
+        // up front also keeps Kotlin's definite-assignment analysis happy.
+        var camCx = 0f
+        var camCy = 0f
+        var camHalfH = u * PASSTHROUGH_WINDOW_VS_SCREEN * scale
+        var camHalfW = camHalfH * cameraAspect
+        var gameScaleX = 1f
+        var gameScaleY = 1f
+        var gameTx = 0f
+        var gameTy = 0f
+        when (s.passthroughMode) {
+            VrPassthroughMode.OVERLAY -> Unit // camera behind, untouched full-size stream on top
+            VrPassthroughMode.CAMERA_MAIN -> {
+                // Camera = enlarged main picture; stream = small bottom-right picture-in-picture.
+                camHalfH = u * PASSTHROUGH_CAMERA_MAIN_VS_SCREEN * scale
+                camHalfW = camHalfH * cameraAspect
+                val pip = PASSTHROUGH_GAME_PIP_SCALE
+                gameScaleX = pip
+                gameScaleY = pip
+                // Slide the PiP towards the bottom-right corner of the ORIGINAL screen rectangle
+                // (u * gameAspect wide, u high), leaving a small margin.
+                gameTx = (1f - pip) * u * gameAspect * PASSTHROUGH_GAME_PIP_INSET
+                gameTy = -(1f - pip) * u * PASSTHROUGH_GAME_PIP_INSET
+            }
+            VrPassthroughMode.SIDE_BY_SIDE -> {
+                // Camera LEFT, stream RIGHT, two non-overlapping windows each with its own ratio.
+                val halfW = u * PASSTHROUGH_SIDE_BY_SIDE_HALF_W * scale
+                camHalfW = halfW
+                camHalfH = halfW / cameraAspect
+                camCx = -u * PASSTHROUGH_SIDE_BY_SIDE_CENTER_X
+                val gameHalfH = halfW / gameAspect
+                gameScaleX = halfW / (u * gameAspect)
+                gameScaleY = gameHalfH / u
+                gameTx = u * PASSTHROUGH_SIDE_BY_SIDE_CENTER_X
+            }
+        }
+
+        // Camera quad: head-locked, drawn FIRST so the nearer stream quad composites on top.
+        val cw = camHalfW * depthScale
+        val ch = camHalfH * depthScale
+        val ccx = camCx * depthScale
+        val ccy = camCy * depthScale
+        val z = -d2
+        val positions = floatArrayOf(
+            ccx - cw, ccy - ch, z,
+            ccx - cw, ccy + ch, z,
+            ccx + cw, ccy - ch, z,
+            ccx + cw, ccy + ch, z,
+        )
+        ptPositionBuffer.clear()
+        ptPositionBuffer.put(positions)
+        ptPositionBuffer.position(0)
+
+        // Stream quad transform: a pure model matrix (scale + translate) applied through the MVP
+        // to the EXISTING positionBuffer. No geometry rebuild -> curvature and vertex count are
+        // preserved, and the panel/menu quad (drawn with the original MVP) is never affected.
+        VrMatrix4.identityInto(gameModelMatrix)
+        gameModelMatrix[0] = gameScaleX
+        gameModelMatrix[5] = gameScaleY
+        gameModelMatrix[12] = gameTx
+        gameModelMatrix[13] = gameTy
+
+        // Base UVs match VrScreenGeometry (v=0 at the TOP of the quad). Bake the sensor/display
+        // rotation and the front-camera mirror into the sampled coords: pure CPU buffer work,
+        // NO shader change, NO GL_BLEND, no mutation of the Cardboard SDK's GL state.
+        val uv = floatArrayOf(0f, 1f, 0f, 0f, 1f, 1f, 1f, 0f)
+        ptTexCoordBuffer.clear()
+        var i = 0
+        while (i < uv.size) {
+            // su/sv (not u/v) so these UV locals never shadow the outer `val u` = halfHeight.
+            var su = uv[i]
+            var sv = uv[i + 1]
+            when (ptRotationDeg) {
+                90 -> { val nu = sv; sv = 1f - su; su = nu }
+                180 -> { su = 1f - su; sv = 1f - sv }
+                270 -> { val nu = 1f - sv; sv = su; su = nu }
+                else -> Unit
+            }
+            if (ptMirror) su = 1f - su
+            ptTexCoordBuffer.put(su)
+            ptTexCoordBuffer.put(sv)
+            i += 2
+        }
+        ptTexCoordBuffer.position(0)
+    }
+
+    /**
+     * Draws the live camera as ONE head-locked window. Returns true when the window was drawn, so
+     * drawEyeScene() can suppress the 360° panorama (mutually exclusive background layers).
+     */
+    private fun drawPassthroughWindow(mvp: FloatArray, s: VrSettings): Boolean {
+        val handles = video ?: return false
+        if (!s.passthroughEnabled || s.passthroughOpacity <= 0f) return false
+        if (ptTextureId == 0 || !ptHasFrame.get()) return false
+        GLES20.glUseProgram(handles.program)
+        GLES20.glUniformMatrix4fv(handles.mvp, 1, false, mvp, 0)
+        // Over the SDK's pure-black clear, multiplying the camera colour by opacity is exactly
+        // mix(black, camera, opacity) — no blending state is touched.
+        GLES20.glUniform1f(handles.brightness, s.passthroughOpacity)
+        GLES20.glUniformMatrix4fv(handles.stMatrix, 1, false, ptStMatrix, 0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform1i(handles.texture, 0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, ptTextureId)
+        ptPositionBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(handles.position)
+        GLES20.glVertexAttribPointer(handles.position, 3, GLES20.GL_FLOAT, false, 12, ptPositionBuffer)
+        ptTexCoordBuffer.position(0)
+        GLES20.glEnableVertexAttribArray(handles.texCoord)
+        GLES20.glVertexAttribPointer(handles.texCoord, 2, GLES20.GL_FLOAT, false, 8, ptTexCoordBuffer)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisableVertexAttribArray(handles.position)
+        GLES20.glDisableVertexAttribArray(handles.texCoord)
+        return true
     }
 
     private fun uploadPanel() {
@@ -1476,6 +1861,31 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     }
 
     private companion object {
+        // --- 摄像头透视 / Passthrough --------------------------------------------------------
+        // Preview buffer sizes. 4:3 is the native sensor ratio on most phones; 16:9 is a crop.
+        // SurfaceTexture.setDefaultBufferSize() and the window quad share the SAME ratio, so the
+        // live picture is never stretched. Switching the ratio restarts the Camera2 session.
+        const val PASSTHROUGH_PREVIEW_W_4_3 = 1280
+        const val PASSTHROUGH_PREVIEW_H_4_3 = 960
+        const val PASSTHROUGH_PREVIEW_W_16_9 = 1280
+        const val PASSTHROUGH_PREVIEW_H_16_9 = 720
+        const val PASSTHROUGH_ASPECT_4_3 = 4f / 3f
+        const val PASSTHROUGH_ASPECT_16_9 = 16f / 9f
+        /** Camera window sits this much further away than the stream screen (metres). */
+        const val PASSTHROUGH_WINDOW_DEPTH_M = 0.8f
+        /** OVERLAY: camera window half-height / stream half-height, at windowScale = 1. */
+        const val PASSTHROUGH_WINDOW_VS_SCREEN = 2.2f
+        /** CAMERA_MAIN: camera is enlarged into the main picture (at windowScale = 1). */
+        const val PASSTHROUGH_CAMERA_MAIN_VS_SCREEN = 1.7f
+        /** SIDE_BY_SIDE: half-width of each window, relative to the stream half-height. */
+        const val PASSTHROUGH_SIDE_BY_SIDE_HALF_W = 0.86f
+        /** SIDE_BY_SIDE: horizontal centre offset of each window (same units). */
+        const val PASSTHROUGH_SIDE_BY_SIDE_CENTER_X = 0.95f
+        /** CAMERA_MAIN: isotropic scale of the stream picture-in-picture. */
+        const val PASSTHROUGH_GAME_PIP_SCALE = 0.30f
+        /** CAMERA_MAIN: how far the PiP slides towards the bottom-right (0 = centred, 1 = corner). */
+        const val PASSTHROUGH_GAME_PIP_INSET = 0.80f
+
         /**
          * Destination texture formats tried against the window framebuffer, in order:
          * {internalFormat, format, type}. RGBA8 is first (fast path on RGBA8 displays), but an

@@ -12,6 +12,8 @@ sealed class VrCommand {
     object Consumed : VrCommand()
 
     object ToggleVrMode : VrCommand()
+    /** L2+R2 long-press: FLIP passthroughEnabled only. Layout stays whatever the settings say. */
+    object TogglePassthrough : VrCommand()
     object ToggleMenu : VrCommand()
     object CloseMenu : VrCommand()
     object Confirm : VrCommand()
@@ -42,6 +44,10 @@ sealed class VrCommand {
  *    editing (VrMenuModel.adjustIfEditing, enforced in VrSession). Before A, the stick MUST still
  *    do something useful: real-device feedback was "摇杆上下滑动不能切换选项", because the old
  *    router emitted Adjust unconditionally and VrSession silently dropped it while disarmed.
+ *  - L2+R2 (LT/RT) long-press is a DEDICATED ON/OFF switch for camera passthrough. It emits ONE
+ *    TogglePassthrough per hold and NEVER changes the layout mode: the three styles live in the
+ *    settings (user request: "快捷键只负责开启和关闭，具体的样式调整放在设置里面调就好").
+ *    It is disabled while the in-VR menu is open and while VR is off.
  *  - Pads that report their D-pad as AXIS_HAT_Y instead of KEYCODE_DPAD_* are handled by onHat().
  *
  * No Android framework types are used here; VrKeys holds plain Int constants so JVM unit tests run
@@ -65,6 +71,10 @@ class VrGamepadRouter {
     private var menuHoldStartMs = Long.MIN_VALUE
     /** Latches once a long-press fired, until the hold is released, so repeats cannot re-toggle. */
     private var menuHoldFired = false
+    /** Time when the L2+R2 hold began. Long.MIN_VALUE = no hold in progress. */
+    private var passthroughHoldStartMs = Long.MIN_VALUE
+    /** Latches once the L2+R2 long-press fired, until one of the triggers is released. */
+    private var passthroughHoldFired = false
 
     fun reset() {
         pressed.clear()
@@ -73,6 +83,7 @@ class VrGamepadRouter {
         lastKeyRepeatMs = Long.MIN_VALUE
         menuHoldStartMs = Long.MIN_VALUE
         menuHoldFired = false
+        clearPassthroughHold()
         editing = false
         lastHatY = 0f
     }
@@ -86,6 +97,9 @@ class VrGamepadRouter {
             // Releasing any key of the hold cancels the timer and clears the latch, so the user
             // must deliberately press-and-hold again to toggle the menu a second time.
             if (!menuHoldActive()) clearMenuHold()
+            // Releasing EITHER trigger drops the hold, so a fresh deliberate long-press is
+            // required for the next ON/OFF toggle. OS key-repeat alone can never re-fire it.
+            if (!passthroughComboHeld()) clearPassthroughHold()
             return if (menuOpen) VrCommand.Consumed else VrCommand.PassThrough
         }
         if (action != VrKeys.ACTION_DOWN) return VrCommand.PassThrough
@@ -100,6 +114,9 @@ class VrGamepadRouter {
         val comboBefore = comboPressed()
         val alreadyDown = !pressed.add(keyCode)
         val comboNow = comboPressed()
+        // L2+R2 is a SEPARATE combo from L1+R1 (which enters VR). Tracking it here keeps the two
+        // independent: a held trigger pair can never accidentally look like the VR toggle.
+        val passthroughComboNow = passthroughComboHeld()
         val shoulderDown = keyCode == VrKeys.BUTTON_L1 || keyCode == VrKeys.BUTTON_R1
         if (!menuOpen && comboNow) {
             if (!comboBefore && shoulderDown && !comboFired) {
@@ -117,6 +134,16 @@ class VrGamepadRouter {
         // MIN_VALUE arm below is only a defensive fallback for a hold that became valid later.
         if (alreadyDown) {
             if (!menuOpen) {
+                // L2+R2 long-press -> ONE edge-triggered ON/OFF toggle. It deliberately does NOT
+                // cycle the three layout styles; those are settings (user request). The latch is
+                // cleared only when a trigger is released, so OS key-repeat cannot re-fire it.
+                if (vrEnabled && passthroughComboNow && !passthroughHoldFired &&
+                    passthroughHoldStartMs != Long.MIN_VALUE &&
+                    timeMs - passthroughHoldStartMs >= VrKeys.PASSTHROUGH_LONG_PRESS_MS
+                ) {
+                    passthroughHoldFired = true
+                    return VrCommand.TogglePassthrough
+                }
                 if (vrEnabled && menuHoldActive()) {
                     if (menuHoldStartMs == Long.MIN_VALUE) {
                         menuHoldStartMs = timeMs
@@ -144,6 +171,14 @@ class VrGamepadRouter {
 
         lastKeyRepeatMs = Long.MIN_VALUE
         if (menuOpen) return menuKey(keyCode)
+        // Arm the L2+R2 hold clock on the INITIAL down that completes the pair, exactly like the
+        // menu long-press: starting it on the first OS key-repeat would add the device's repeat
+        // delay on top of the user's 500 ms hold.
+        if (vrEnabled && passthroughComboNow && !passthroughHoldFired &&
+            passthroughHoldStartMs == Long.MIN_VALUE
+        ) {
+            passthroughHoldStartMs = timeMs
+        }
         // Arm the long-press timer as soon as the hold becomes active: the initial ACTION_DOWN of
         // the second START/SELECT key, or of MODE. Starting it on the first OS key-repeat instead
         // would add that controller's repeat delay (~400 ms, varies per device) on top of the
@@ -216,6 +251,14 @@ class VrGamepadRouter {
     }
 
     /**
+     * Pure predicate shared with VrSession: are BOTH analogue LT/RT triggers pressed past the
+     * threshold? Kept here (instead of in the Android-only VrSession) so JVM unit tests can lock
+     * the real-device trigger path without Robolectric. The keycode path stays in onKey().
+     */
+    fun passthroughTriggersHeld(l2: Float, r2: Float): Boolean =
+        l2 >= VrKeys.TRIGGER_PRESS_THRESHOLD && r2 >= VrKeys.TRIGGER_PRESS_THRESHOLD
+
+    /**
      * Called when A arms/disarms editing or when the page changes, so the stick's repeat cadence
      * restarts and the new mode responds immediately. HAT state is deliberately NOT cleared:
      * lastHatY describes a PHYSICALLY HELD direction, and zeroing it would make a still-pressed
@@ -256,6 +299,16 @@ class VrGamepadRouter {
     private fun clearMenuHold() {
         menuHoldStartMs = Long.MIN_VALUE
         menuHoldFired = false
+    }
+
+    /** True only while BOTH triggers are physically held. Independent of the L1+R1 VR combo. */
+    private fun passthroughComboHeld(): Boolean =
+        pressed.contains(VrKeys.PASSTHROUGH_TOGGLE_COMBO[0]) &&
+            pressed.contains(VrKeys.PASSTHROUGH_TOGGLE_COMBO[1])
+
+    private fun clearPassthroughHold() {
+        passthroughHoldStartMs = Long.MIN_VALUE
+        passthroughHoldFired = false
     }
 
     companion object {

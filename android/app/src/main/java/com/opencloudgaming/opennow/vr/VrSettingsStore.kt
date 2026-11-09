@@ -36,6 +36,26 @@ class VrSettingsStore(context: Context) {
             )
         }.getOrDefault(VrSettings.DEFAULT.screenFillMode),
         zoomScale = prefs.getFloat(K_ZOOM, VrSettings.DEFAULT.zoomScale),
+        passthroughEnabled = prefs.getBoolean(K_PASSTHROUGH, VrSettings.DEFAULT.passthroughEnabled),
+        passthroughCameraFacing = runCatching {
+            VrPassthroughFacing.valueOf(
+                prefs.getString(K_PASSTHROUGH_FACING, VrSettings.DEFAULT.passthroughCameraFacing.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughCameraFacing),
+        passthroughOpacity = prefs.getFloat(K_PASSTHROUGH_OPACITY, VrSettings.DEFAULT.passthroughOpacity),
+        passthroughWindowScale = prefs.getFloat(
+            K_PASSTHROUGH_WINDOW, VrSettings.DEFAULT.passthroughWindowScale,
+        ),
+        passthroughAspect = runCatching {
+            VrPassthroughAspect.valueOf(
+                prefs.getString(K_PASSTHROUGH_ASPECT, VrSettings.DEFAULT.passthroughAspect.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughAspect),
+        passthroughMode = runCatching {
+            VrPassthroughMode.valueOf(
+                prefs.getString(K_PASSTHROUGH_MODE, VrSettings.DEFAULT.passthroughMode.name) ?: "",
+            )
+        }.getOrDefault(VrSettings.DEFAULT.passthroughMode),
     ).sanitized()
 
     fun save(settings: VrSettings) {
@@ -61,6 +81,12 @@ class VrSettingsStore(context: Context) {
             .putFloat(K_IPD_SCALE, s.ipdScale)
             .putString(K_FILL_MODE, s.screenFillMode.name)
             .putFloat(K_ZOOM, s.zoomScale)
+            .putBoolean(K_PASSTHROUGH, s.passthroughEnabled)
+            .putString(K_PASSTHROUGH_FACING, s.passthroughCameraFacing.name)
+            .putFloat(K_PASSTHROUGH_OPACITY, s.passthroughOpacity)
+            .putFloat(K_PASSTHROUGH_WINDOW, s.passthroughWindowScale)
+            .putString(K_PASSTHROUGH_ASPECT, s.passthroughAspect.name)
+            .putString(K_PASSTHROUGH_MODE, s.passthroughMode.name)
             .apply()
     }
 
@@ -85,5 +111,11 @@ class VrSettingsStore(context: Context) {
         const val K_IPD_SCALE = "ipdScale"
         const val K_FILL_MODE = "screenFillMode"
         const val K_ZOOM = "zoomScale"
+        const val K_PASSTHROUGH = "passthroughEnabled"
+        const val K_PASSTHROUGH_FACING = "passthroughCameraFacing"
+        const val K_PASSTHROUGH_OPACITY = "passthroughOpacity"
+        const val K_PASSTHROUGH_WINDOW = "passthroughWindowScale"
+        const val K_PASSTHROUGH_ASPECT = "passthroughAspect"
+        const val K_PASSTHROUGH_MODE = "passthroughMode"
     }
 }
