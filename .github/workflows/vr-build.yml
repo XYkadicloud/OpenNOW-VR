@@ -46,6 +46,26 @@ jobs:
           "$SDKMGR" --install "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.14206865" "cmake;3.31.6"
           echo "sdk.dir=$SDK" > local.properties
 
+      # The wrapper downloads gradle-9.8.0-bin.zip on every fresh runner. GitHub's egress to
+      # services.gradle.org occasionally times out mid-download and the whole job goes red for
+      # a reason unrelated to the code. Warm (and cache) the distribution with retries first.
+      - name: Warm the Gradle distribution (retry transient download timeouts)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          for attempt in 1 2 3 4 5; do
+            echo "Gradle distribution warm-up attempt ${attempt}/5"
+            if ./gradlew --version; then
+              echo "Gradle distribution ready"
+              exit 0
+            fi
+            echo "Warm-up attempt ${attempt} failed; retrying" >&2
+            sleep 10
+          done
+          echo "FAIL: Gradle distribution could not be downloaded after 5 attempts" >&2
+          exit 1
+
       - name: Build sdk-debug.aar (assembleDebug, NOT release)
         shell: bash
         run: |
@@ -142,6 +162,24 @@ jobs:
           mkdir -p app/libs
           mv -v app/libs/sdk-debug.aar app/libs/cardboard-sdk.aar
           ls -la app/libs
+
+      # Same transient-download guard as the SDK job, but for the host app's gradle-9.7.1 dist.
+      - name: Warm the Gradle distribution (retry transient download timeouts)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          for attempt in 1 2 3 4 5; do
+            echo "Gradle distribution warm-up attempt ${attempt}/5"
+            if ./gradlew --version; then
+              echo "Gradle distribution ready"
+              exit 0
+            fi
+            echo "Warm-up attempt ${attempt} failed; retrying" >&2
+            sleep 10
+          done
+          echo "FAIL: Gradle distribution could not be downloaded after 5 attempts" >&2
+          exit 1
 
       - name: Run VR JVM unit tests and build the debug APK
         shell: bash
