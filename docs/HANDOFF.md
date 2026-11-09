@@ -1513,7 +1513,10 @@ onRendererShutdown: ptCamera.stop() → release() → releasePassthroughTexture(
 - 符号级复核：`VrMatrix4.identityInto` / `VrScreenGeometry.halfHeight` / `ProgramHandles.stMatrix` /
   `VrPassthroughCamera.start()` 签名 / `Listener` 两方法 / `VrTheaterView.applySettings()` /
   `VrModeHost.update` / CAMERA 权限与 uses-feature 全部匹配，无必红编译点。
-- CI 结论见 `README-VR.md §5.1` 本轮新增行。
+- **GitHub Actions run `42560700441`（commit `2008d48`）两 job 全绿**：
+  `build-cardboard-sdk-aar` success、`vr-unit-tests-and-debug-apk` success
+  （Kotlin 编译 + JVM 单测 + debug APK 出包 + JNI `.so` 守卫）。
+  记录见 `README-VR.md §5.1` 本轮新增行。
 
 ### 20.8 待真机复测（CI 抓不到）
 
