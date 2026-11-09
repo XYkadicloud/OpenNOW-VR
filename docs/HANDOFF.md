@@ -1681,3 +1681,42 @@ VrSettings (档位)
 
 帧率档位数量变化不影响设置项总数（仍是 31 个）与菜单行数（仍是 34 行）。
 
+### 21.11 CI 三次运行与最终绿灯（如实记录）
+
+r6 代码（`38378f6` + `9401ef0`）**连续两次 CI 都不是被编译器验证的**，这一点必须写清楚，
+否则「CI 红过 → 又绿了」容易被误读成「修了某个编译错误」。
+
+| run | commit | 结论 | 实际发生了什么 |
+| --- | --- | --- | --- |
+| `42570810255` | `38378f6` | 失败 | AAR job 下载 `gradle-9.8.0-bin.zip` 触发 `java.io.IOException: ... failed: timeout (10000ms)` → `SocketTimeoutException: Read timed out`；app job 被 `needs: cardboard-aar` 跳过 |
+| `42571202478` | `9401ef0` | 失败 | 这次 AAR job 全绿；app job 下载 `gradle-9.7.1-bin.zip` 同样 10 秒超时；无测试报告产出 |
+| `42572527294` | `e00287a` | **成功** | r6 业务代码首次完整编译 + 单测 + 出 APK |
+
+根因是 `third_party/cardboard/gradle/wrapper/gradle-wrapper.properties` 里写死的
+`networkTimeout=10000` / `retries=0`，而 `android/gradle/wrapper/gradle-wrapper.properties`
+连这两项都没有（用 wrapper 默认 10 秒）。GitHub runner 到 `services.gradle.org` 偶发抖动时，
+下载一超过 10 秒整个 job 就红，与 Kotlin / Gradle 构建脚本 / 依赖解析全部无关。
+
+`e00287a` 的加固（**3 个文件，不含任何业务代码改动**）：
+
+- 两个 wrapper 均设 `networkTimeout=120000`、`retries=5`、`retryBackOffMs=2000`。
+- `.github/workflows/vr-build.yml` 两个 job 各新增
+  `Warm the Gradle distribution (retry transient download timeouts)` 步骤：
+  先带 5 次重试跑 `./gradlew --version`，把发行包缓存好，再执行真正的 assemble / test。
+  这样即使 wrapper 版本较老不认新属性，也能靠步骤级重试兜住。
+
+`42572527294` 最终结论（GitHub API + job 日志双查）：
+
+- `build-cardboard-sdk-aar` **success**、`vr-unit-tests-and-debug-apk` **success**；
+  run `conclusion=success`，`head_sha=e00287a72411ca8ca1b2f39a2e75572a85f00b84`。
+- `Warm the Gradle distribution` 两个 job 都 success，说明预热确实生效。
+- `VR JVM test suites: 7 | tests: 125 | failures: 0 | errors: 0 | skipped: 0`，
+  `BUILD SUCCESSFUL in 9m 11s`。
+- artifacts：`opennow-vr-debug-arm64-v8a` 47603818 B、`cardboard-sdk-aar` 385622 B、
+  `vr-unit-test-report` 27648 B；AAR / APK 两道 `libcardboard_sdk_jni.so` 守卫均 success。
+
+**CI 仍证明不了的部分不变**：AUTO 旋转在目标机型是否正立、真实预览尺寸 / 帧率、
+竖直线条是否不再压扁、转头是否零相对滑动、15 帧档观感、三种布局的窗口位置、
+L2/R2 在该手柄上是 keycode 还是模拟轴、上下黑边是否真的顶满。清单见 §21.8 与
+`README-VR.md §3.8`。
+
