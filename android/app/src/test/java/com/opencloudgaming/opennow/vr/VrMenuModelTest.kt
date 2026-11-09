@@ -404,4 +404,68 @@ class VrMenuModelTest {
         repeat(times) { current = VrMenuModel.activate(current, VrMenuItemId.PASSTHROUGH_FPS) }
         return current
     }
+
+    // --- 滚动窗口（2026-11-09 真机：设置项超出设置页面，看不到下面的项） -------------------------
+
+    @Test
+    fun visibleWindowNeverOverflowsAnyPageAndAlwaysShowsTheSelection() {
+        VrMenuModel.pages.forEach { page ->
+            val count = VrMenuModel.itemsFor(page).size
+            val first = VrMenuModel.firstIndexOf(page)
+            (first..VrMenuModel.lastIndexOf(page)).forEach { sel ->
+                val w = VrMenuModel.visibleWindowFor(page, sel)
+                assertTrue("$page $sel first", w.first >= 0)
+                assertTrue("$page $sel last", w.last < count)
+                assertTrue(
+                    "$page $sel size",
+                    w.last - w.first + 1 <= VrMenuModel.VISIBLE_ROWS,
+                )
+                assertTrue("$page $sel shows selection", (sel - first) in w)
+            }
+        }
+    }
+
+    @Test
+    fun thirteenRowEnvironmentPageScrollsDownToItsLastRow() {
+        val env = VrMenuModel.pages[3]
+        val first = VrMenuModel.firstIndexOf(env)
+        val items = VrMenuModel.itemsFor(env)
+        assertEquals(13, items.size)
+        assertEquals(0, VrMenuModel.visibleWindowFor(env, first).first)
+        val bottom = VrMenuModel.visibleWindowFor(env, VrMenuModel.lastIndexOf(env))
+        assertEquals(items.size - VrMenuModel.VISIBLE_ROWS, bottom.first)
+        assertEquals(items.size - 1, bottom.last)
+        assertEquals(VrMenuItemId.PASSTHROUGH_HEAD_LOCKED, items[bottom.last].id)
+    }
+
+    @Test
+    fun windowOnlyMovesWhenSelectionPassesItsBottomEdge() {
+        val env = VrMenuModel.pages[3]
+        val first = VrMenuModel.firstIndexOf(env)
+        // The first ten rows all render in the top window.
+        (0 until VrMenuModel.VISIBLE_ROWS).forEach { row ->
+            assertEquals(0, VrMenuModel.visibleWindowFor(env, first + row).first)
+        }
+        // Each further row scrolls the window by exactly one.
+        assertEquals(1, VrMenuModel.visibleWindowFor(env, first + 10).first)
+        assertEquals(2, VrMenuModel.visibleWindowFor(env, first + 11).first)
+        assertEquals(3, VrMenuModel.visibleWindowFor(env, first + 12).first)
+        // Going back up returns to the top window (stateless).
+        assertEquals(0, VrMenuModel.visibleWindowFor(env, first).first)
+    }
+
+    @Test
+    fun visibleWindowIsStatelessClampsOutOfRangeSelectionAndHonoursCustomRowCounts() {
+        val env = VrMenuModel.pages[3]
+        val last = VrMenuModel.itemsFor(env).size - 1
+        val w = VrMenuModel.visibleWindowFor(env, 100_000)
+        assertEquals(last, w.last)
+        assertTrue(w.first >= 0)
+        // Future pages: any visibleRows value keeps the selection in view.
+        val small = VrMenuModel.visibleWindowFor(env, VrMenuModel.lastIndexOf(env), 3)
+        assertEquals(3, small.last - small.first + 1)
+        assertEquals(VrMenuModel.itemsFor(env).size - 3, small.first)
+        assertEquals(last, small.last)
+        assertEquals(10, VrMenuModel.VISIBLE_ROWS)
+    }
 }

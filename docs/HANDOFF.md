@@ -1548,6 +1548,11 @@ onRendererShutdown: ptCamera.stop() → release() → releasePassthroughTexture(
 
 ## 21. 2026-11-09 真机反馈：摄像头方向错 / 直接拉伸 / 不协调 / 分辨率与帧率
 
+> **⚠️ 后验证伪（务必先读 §22）**：本章 §21.3 里「AUTO 基准取传感器安装角」以及
+> 「90°/270° 时窗口比例取倒数」两条结论，在 v0.6.0 装到真机后被用户判定**仍然是错的**
+> —— 正是这两条把窗口变成了竖屏 9:16。§21 保留作为历史记录，**技术实现以 §22 为准**。
+> 分辨率 / 帧率档位、窗口深度与「跟随幕布」默认这两部分结论仍然有效。
+
 ### 21.1 用户诉求（原话）
 
 > 「你的问题有点大，摄像头方向是错的，然后这个你也是直接拉伸，然后而且呢透视你这边各种的做的
@@ -1719,4 +1724,166 @@ r6 代码（`38378f6` + `9401ef0`）**连续两次 CI 都不是被编译器验�
 竖直线条是否不再压扁、转头是否零相对滑动、15 帧档观感、三种布局的窗口位置、
 L2/R2 在该手柄上是 keycode 还是模拟轴、上下黑边是否真的顶满。清单见 §21.8 与
 `README-VR.md §3.8`。
+
+---
+
+## 22. 2026-11-09 第三轮真机反馈：竖屏 9:16 / 拉伸 / 设置页溢出且不能下滚
+
+### 22.1 用户诉求（原话）
+
+> 「没蒙住啊，依然是有错误的，依然是**被强制拉伸成了竖屏的 9:16 比例**，然后还有就是你这边呢
+> 竟然**设置项是没有做到考虑未来越来越多的设置项**，所以说你这边呢，**设置选项超出了那个整个
+> 设置页面的内容**，然后你又**没有做可以向下滑动什么的**，导致不能够向下拉到下面的设置项，
+> 导致**看不到下面的设置项**，你可以自己看一下。」
+
+用户同时附了 2 张截图：`clipboard-2026-11-09T08-23-32-656Z-c41355a0.jpg`（环境页 04/05）
+与 `clipboard-2026-11-09T08-16-10-700Z-6ab54de7.jpg`（主界面）。
+
+### 22.2 截图判读（不要靠猜）
+
+- **环境页 04/05** 从上到下能数出：`360° 背景图 / 背景亮度 / 摄像头透视 / 透视摄像头 /
+  透视可见度 / 透视窗口大小 / 透视窗口比例 / 透视布局 / 透视分辨率 / 透视帧率 …`，
+  第 11 行（`透视钉在眼前`）已经**被面板底边裁掉**，右下角没有任何滚动条或计数。
+  这与用户说的「超出页面 / 不能向下拉」完全一致。
+- 面板是一张固定 **768×432** 的 Canvas 位图，行从 `y=154` 起、`27 px` 一行：
+  `154 + 13*27 = 505 > 432`，**13 行必然有 3 行画到位图外面**。旧代码 `pageItems.forEachIndexed`
+ 一视同仁全画，既没裁剪也没滚动，所以超出的行直接消失。
+- 菜单后面露出的摄像头画面是横向条带（被菜单挡住中段），但用户明确报告在别的布局 /
+  视角下看到的是「竖屏 9:16」。**以用户描述为准**，并用源码去解释，而不是靠这张被遮挡的图反推。
+
+### 22.3 两个根因（源码级）
+
+**A. 竖屏 9:16 = r6 的 AUTO=90 与「旋转取倒数」叠加**
+
+`38378f6`（r6）把 `VrPassthroughCamera.previewRotationDeg()` 改成直接返回
+`CameraCharacteristics.SENSOR_ORIENTATION`（多数机型 **90**），注释理由是「预览缓冲不随屏幕
+旋转，传感器安装角就是基准」。这判断错在：`SENSOR_ORIENTATION` 描述的是传感器相对设备
+**自然（竖屏）方向**的安装角，不是「还欠着的旋转」。VR 强制横屏时，Camera2 输出的预览缓冲
+本来就是正立的横向画面，额外再转 90° 才是把竖直窗格放倒成水平长条的原因 —— v0.5.0 用
+`JPEG_ORIENTATION` 公式、v0.6.0 用裸传感器角，两版殊途同归都多转了 90°。
+
+更致命的是 r6 的 `rebuildPassthroughQuad()`：
+
+```kotlin
+val cameraAspect = (if (effectiveRotation == 90 || effectiveRotation == 270) {
+    1f / previewAspect          // 16:9 -> 9:16
+} else previewAspect).coerceIn(0.25f, 8f)
+```
+
+AUTO 默认算出 90°，于是 `16:9 → 9:16`，`camHalfW = camHalfH * 0.5625` 直接造出一扇
+**竖屏窗口**；画面再被硬塞进这个错误比例的 quad，就是用户说的「强制拉伸成竖屏 9:16」。
+对 4:3 预览同理会变成 `3:4` 竖屏。**这不是某个机型的偶发，是默认路径必现。**
+
+**B. 设置页溢出 = 固定面板位图 + 无条件全量绘制**
+
+`drawMenu()` 里 `pageItems.forEachIndexed { row, item -> ... top = 154f + row * 27f }`，
+环境页从 r6 起涨到 **13 行**，但 `PANEL_H = 432` 从未变过，也没有滚动状态。
+这不是「设置项太多」而是「渲染层假设了行数 ≤ 10」，用户指出的「没有考虑未来越来越多的
+设置项」正是这个隐含假设。
+
+### 22.4 本轮实际改动（9 个文件：6 改 + 2 新 + 1 测试改）
+
+| 文件 | 改动 |
+| --- | --- |
+| **`VrPassthroughGeometry.kt`（新增，58 行）** | 纯 Kotlin 几何规则，**无 Android / OpenGL 依赖**，可 JVM 单测：`windowAspect()` / `previewAspect()` / `contentAspect()` / `centreCrop()` / `cropUv()` |
+| **`VrPassthroughGeometryTest.kt`（新增）** | 6 个用例锁定「窗口恒横向」「预览尺寸归一化到横向」「AUTO 零裁切」「手动 90° 仍横向且裁切」「4:3→16:9 对称中心裁切」「cropUv 恒在 [0,1]」 |
+| `VrTheaterRenderer.kt` | `ptAutoRotationDeg` 默认 `90 → 0`；`rebuildPassthroughQuad()` 窗口比例改为 `VrPassthroughGeometry.windowAspect()`（恒横向、与旋转解耦），真实预览比例只进 `centreCrop()`；UV 生成在旋转 / 镜像之后对 `su/sv` 施加 `cropUv()`；删掉 `PASSTHROUGH_ASPECT_4_3 / _16_9` 两个硬编码常量；**菜单改为只画 `visibleWindowFor()` 的可见窗口 + 右侧滚动条 + 行数计数**；`MENU_ROWS_PER_COLUMN` 删除（已无引用）；状态面板补「窗口 4:3 / 16:9」 |
+| `VrPassthroughCamera.kt` | `previewRotationDeg(cameraId)` → `autoRotationDeg(): Int = 0`（KDoc 完整记录两版误加 90° 的历史）；`choosePreviewSize()` 先过滤 `width >= height` 的横向条目，结果统一 `normaliseLandscape()` 后才上报，杜绝竖屏缓冲尺寸 |
+| `VrSettings.kt` | `VrPassthroughAspect` / `VrPassthroughRotation` 的 KDoc 订正为「窗口恒横向 / AUTO=0 / 旋转只改采样」；**无字段变化** |
+| `VrSettingsSection.kt` | 2D 设置页 4 处文案订正（开关说明、比例说明、分辨率说明、旋转说明），明确「绝不拉伸、绝不竖屏」「AUTO = 0°·横屏已正立」 |
+| `VrMenuModel.kt` | 新增 `const val VISIBLE_ROWS = 10` 与纯函数 `visibleWindowFor(page, selectedIndex, visibleRows)`：返回相对 `itemsFor(page)` 的 `IntRange`，**无状态、无持久偏移**，选中行永远在窗口内 |
+| `VrMenuModelTest.kt` | 新增 4 个用例：所有页所有选中行都不越界且包含选中项；13 行环境页能滚到最后一行 `PASSTHROUGH_HEAD_LOCKED`；窗口只在选中行越过底边时逐行下移、上行回卷；无状态 / 越界钳制 / 自定义 `visibleRows` |
+| `README-VR.md` / `docs/HANDOFF.md` | §3.4 新增滚动说明、§3.8 整段重写为 r7 修复说明、§4 表格 3 行订正；§21 顶部加「后验证伪」提示，新增本章 §22 |
+
+**没有改动**：`VrSettingsStore`（无新字段）、`VrSettingSpec`（无新滑块）、`VrGamepadRouter` /
+`VrSession` / `MainActivity`（输入链路不动）、shader / `GL_BLEND` / Cardboard SDK GL 状态、
+2D 设置页的 `Column`（见 §22.7）。设置项总数仍为 **31**，VR 菜单仍 **5 页 34 行**。
+
+### 22.5 几何规则：为什么不再拉伸
+
+窗口形状与采样内容彻底分离，这是本轮的核心设计：
+
+1. **窗口形状**：`windowAspect(fourThree)` 只返回 `4/3` 或 `16/9`，**恒 > 1**，
+   与 `effectiveRotation`、`ptPreviewW/H` 全部无关。quad 的 `camHalfW = camHalfH * windowAspect`。
+2. **预览尺寸归一化**：`previewAspect(w, h, fallback)` 用 `max/min` 取长边比，
+   所以厂商广告的 `720×1280` 这类竖屏条目也得到 `16/9`，不会污染窗口。
+3. **内容比例**：`contentAspect(previewAspect, rotationDeg)` 只在手动 `90 / 270` 时取倒数，
+   表示「旋转后内容的有效宽高比」。AUTO(0°) 时等于预览比例。
+4. **居中裁切**：`centreCrop(contentAspect, windowAspect)` 只在**一个轴**上给出 `< 1` 的
+   `keep`，`cropUv()` 以中心为基准缩放 UV。旋转 90° 时窗口 u 轴对应 buffer 短边、
+   v 轴对应长边，裁切量仍满足 `cropU/cropV = previewAspect × windowAspect`，
+   **采样区域在 buffer 像素里的宽高比恰好等于窗口比例**，因此每个像素保持原始宽高比。
+   本地 Python 复刻专门断言了这一点（`kept_u / kept_v == windowAspect`）。
+
+一句话：**旋转只改变「采样哪部分 buffer」，永远不改变窗口形状；比例不一致时裁掉多余，
+绝不挤压。** 纯几何独立成类还有个好处：GL context 丢失 / 相机重开后规则不会漂移，且能被
+JVM 单测在没有模拟器、没有 GLSL 的情况下锁死。
+
+### 22.6 菜单滚动窗口
+
+```kotlin
+fun visibleWindowFor(page, selectedIndex, visibleRows = VISIBLE_ROWS): IntRange {
+    val count = itemsFor(page).size
+    val rows = minOf(visibleRows, count)
+    val selectedRow = (selectedIndex - firstIndexOf(page)).coerceIn(0, count - 1)
+    val maxStart = (count - rows).coerceAtLeast(0)
+    val start = (selectedRow - (rows - 1)).coerceIn(0, maxStart)
+    return start until (start + rows)
+}
+```
+
+- **无状态**：不存 scroll offset，换页 / 退出重进 / 进程重启都不会错位；选中行恒在窗口内。
+- 渲染器只 `for (row in window)` 画可见行，`top = 154 + (row - window.first) * 27`，
+  最多 10 行 → 最后一行底边 `154 + 10*27 = 424 < 432`，**永远不会画到位图外**。
+- 溢出时（`total > rowsShown`）在 banner 右侧显示 `1-10/13 ↓到底自动下翻`，
+  并在 `x=752` 画轨道 + 按比例定位的滑块，用户能直观看出下面还有内容。
+- 行数上限不再是布局约束：把环境页临时改成 60 行做本地复刻，选中任意行都能正确滚动。
+
+### 22.7 2D 手机设置页为什么不用改（重要，别加嵌套滚动）
+
+用户说「设置页面」时有歧义，但截图是 VR 内那块固定位图菜单。核查宿主
+`OpenNowSettingsScreens.kt:466`：`VrSettingsSection()` 外层已经包在
+
+```kotlin
+Column(Modifier.fillMaxSize().verticalScroll(scrollState) ...)
+```
+
+里，**2D 设置页本来就能上下滑**。`VrSettingsSection()` 内部 `Column(Modifier.fillMaxWidth())`
+若再加 `verticalScroll` 会造成嵌套滚动冲突 / 无限高度异常。因此本轮**刻意不动 2D 页**，
+只修 VR 内 GL 菜单。
+
+### 22.8 验证
+
+- `python .verify_r7.py`（本地纯逻辑复刻，无 Android SDK）：**155 条断言全绿**。
+  覆盖 `VrPassthroughGeometry` 全部函数、Camera2 横向尺寸选择 / 归一化、
+  AUTO=0、AUTO 零裁切、4:3→16:9 对称裁切、手动 90° 仍横向且采样区比例匹配窗口、
+  34 行 / 环境页 13 行的滚动窗口、越界钳制、自定义 `visibleRows`、假设 60 行未来页。
+- `git diff --check`：无空白错误。
+- JVM 单测与 Kotlin 编译**只能靠 GitHub Actions**（本机无 Android SDK / Gradle / JDK 17），
+  见 §5.1 的 CI 记录与 §22.9。
+
+### 22.9 待真机复测（CI 抓不到）
+
+1. **装新 APK 后窗口是不是横向 4:3**（默认），而不是竖屏 9:16；竖直窗格 / 地砖缝是否竖直、
+   不被压扁或拉长。
+2. AUTO(0°) 下画面是否正立；若仍横躺，按 `0° / 90° / 180° / 270°` 顺序对照现实场景拨，
+   **每档窗口都应是横向的**。
+3. 切 `16:9` 窗口 + 4:3 预览时，上下是否对称裁切（不是拉伸）；切 360P / 480P / 720P / 1080P
+   各档是否都不变形。
+4. 环境页能否用 `↑↓` 一路走到 `透视钉在眼前`（第 13 行），右侧滚动条与 `1-10/13` 计数是否
+   随之下移；换页再回来是否回到顶部窗口（无状态）。
+5. 状态面板是否显示 `窗口 4:3` / `窗口 16:9` 与实际预览宽高、帧率、生效旋转角。
+6. 三种布局 `OVERLAY / CAMERA_MAIN / SIDE_BY_SIDE` 下摄像头窗口是否都保持横向。
+
+### 22.10 已知技术债（如实保留）
+
+- 手机摄像头是单目 2D 画面，套 `eyeFromHead + perspective` 产生的是**近似**双眼视差，
+  不是真实深度；「不协调感」无法 100% 消除，只能靠「跟随幕布 + 缩小深度差」压到最低。
+- 若某机型 `StreamConfigurationMap` 只提供竖屏预览条目，`normaliseLandscape()` 只保证
+  **上报值**是横向；Camera2 producer 仍可能按竖屏尺寸输出，`getTransformMatrix()` 于是携带
+  缩放。当前优先挑横向条目，绝大多数设备不会走到这条分支；真机如遇变形可优先切 16:9 档。
+- 手动 `90 / 270` 覆盖会把横向 buffer 的有效内容变成竖屏比例，为填满横向窗口会裁掉较多
+  上下内容（数学上正确但视野变窄）。这是「保持像素比例」的必然代价，不是 bug。
+- 竖屏 9:16 与菜单溢出都属**视觉 / 交互**问题，JVM 单测只能锁几何与滚动规则，
+  最终仍以真机截图为准。
 
