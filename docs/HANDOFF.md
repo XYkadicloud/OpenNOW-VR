@@ -1886,4 +1886,32 @@ Column(Modifier.fillMaxSize().verticalScroll(scrollState) ...)
   上下内容（数学上正确但视野变窄）。这是「保持像素比例」的必然代价，不是 bug。
 - 竖屏 9:16 与菜单溢出都属**视觉 / 交互**问题，JVM 单测只能锁几何与滚动规则，
   最终仍以真机截图为准。
+- **源码注释滞后（纯措辞，不影响行为，下一轮顺手订正）**：
+  `VrPassthroughCamera.Listener.onPreviewConfig` 的 KDoc 仍写「renderer MUST build its
+  window quad from these (after applying the effective rotation)」以及
+  「`[autoRotationDeg]` is the sensor-installation angle」。r7 起窗口形状由
+  `passthroughAspect` 决定、真实宽高只用于居中裁切，`autoRotationDeg()` 恒返回 0。
+  为了不让导出包源码与 CI 验证的 `ac584b7` 出现字节差异，本轮**刻意没有改这两行**，
+  正确语义以 `VrPassthroughGeometry` 的 KDoc、`§22.5` 与 `README-VR.md §3.8` 为准。
+
+### 22.11 CI 验证结论（如实记录）
+
+r7 代码（`ac584b7`）**首次在 CI 完整编译通过**，无任何非代码超时。
+
+| run | commit | 结论 | 实际发生了什么 |
+| --- | --- | --- | --- |
+| `42590354856` | `ac584b7` | **成功** | 两个 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`，`BUILD SUCCESSFUL in ~9m`。产物 `opennow-vr-debug-arm64-v8a` 61995484 B、`cardboard-sdk-aar` 388092 B。 |
+
+**CI 仍证明不了的部分不变**：窗口是否横向 4:3、AUTO 是否正立、各档位是否不变形、
+环境页能否走到第 13 行、滚动条与计数是否正确、状态面板是否显示窗口比例。
+清单见 §22.9 与 `README-VR.md §3.8`。
+
+---
+
+## 23. 交付物状态
+
+- `OpenNOW-VR-modules-20261108-r7.zip`：以 r6 为基底，覆盖 8 个变动文件、新增
+  `VrPassthroughGeometry.kt` / `VrPassthroughGeometryTest.kt`，重生成 6 份说明文件（同步
+  `ac584b7` / 纯文档提交 / `42590354856`）。
+- v0.7.0 Release：待生成（含 debug APK、r7 zip、AAR）。
 
