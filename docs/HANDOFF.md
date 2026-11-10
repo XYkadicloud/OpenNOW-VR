@@ -54,7 +54,13 @@ https://github.com/XYkadicloud/OpenNOW-VR
 - 公开仓库，默认分支 `main`
 - 唯一启用的工作流：`.github/workflows/vr-build.yml`（`vr-build`）
 - Actions 页面：`https://github.com/XYkadicloud/OpenNOW-VR/actions`
-- APK 工件名：`opennow-vr-debug-arm64-v8a`（外层 zip 内是 `app-arm64-v8a-debug.apk`）
+- APK 工件名（v0.9.0 起两个，见 §26）：
+  **`opennow-vr-release-arm64-v8a`**（正式版唯一发布产物，外层 zip 内是
+  `app-arm64-v8a-release.apk`）、`opennow-vr-debug-arm64-v8a`（诊断备用，
+  外层 zip 内是 `app-arm64-v8a-debug.apk`）。历史 run 只有后者。
+- **当前正式版**：`v0.9.0` / Stable / Release ID `440293521` / tag @ `aecf7e3` /
+  CI run `42806921756`。唯一需安装的资产是
+  `OpenNOW-VR-v0.9.0-arm64-v8a-release.apk`（34109338 B），**不是 debug 包**。
 
 **上游项目链接（2026-11-06 用 GitHub API 逐一核实可访问）**：
 
@@ -64,7 +70,10 @@ https://github.com/XYkadicloud/OpenNOW-VR
 | 更上游的官方 Android 客户端仓库 | `https://github.com/OpenCloudGaming/OpenNOW-Android`，默认分支 `main`（内容极简） |
 | 上游组织主项目 | `https://github.com/OpenCloudGaming/OpenNOW`，默认分支 `main`，描述 `Custom GeForce Now Client Named OpenNOW` |
 
-> 2.3.8 **不是**这些仓库里的 tag，来自应用内更新 API，见 2.3 / 4.2 节。
+> 2.3.8 **不是** tag，而是官方主仓库 `OpenCloudGaming/OpenNOW` 的 `android-native`
+> 分支 HEAD `34727ff764`（`versionCode=193` / `versionName="2.3.8"`），已于 2026-11-10
+> 完整合并，见 **§24**。**旧记录里「2.3.8 无可合并公开源码」只针对上面的 fork 与
+> 应用内更新 API，对官方主仓库不成立，此结论已作废。**
 >
 > **2026-11-10 更正**：上表漏查了官方主仓库 `OpenCloudGaming/OpenNOW` 的
 > **`android-native` 分支** —— 其 HEAD `34727ff764` 就是 2.3.8 源码
@@ -2090,6 +2099,7 @@ CI 的 Gradle 下载加固与预热步骤。
 | --- | --- | --- |
 | **`v0.7.0`** | **正式版 / Stable** | Release ID `438940588`，`prerelease=false`，3 个资源 `state=uploaded`；用户真机复测通过。**保持不动，不被合并版覆盖** |
 | **`v0.8.0`** | **Pre-release** | Release ID `440214109`，<https://github.com/XYkadicloud/OpenNOW-VR/releases/tag/v0.8.0>；tag 在 `fd743ea`。3 个资源：`app-arm64-v8a-debug.apk` **62078136 B**、`sdk-debug.aar` **388092 B**、`OpenNOW-VR-modules-20261110-r8.zip` **474907 B**（54 entries） |
+| **`v0.9.0`** | **正式版 / Stable（当前）** | Release ID `440293521`，<https://github.com/XYkadicloud/OpenNOW-VR/releases/tag/v0.9.0>；tag @ `aecf7e3`，`prerelease=false`。3 个资源：`OpenNOW-VR-v0.9.0-arm64-v8a-release.apk` **34109338 B**（`:app:assembleRelease` 已签名 / 非 debuggable / R8）、`cardboard-sdk-v1.36.0.aar` **388092 B**、`OpenNOW-VR-modules-20261110-r9.zip`（56 entries）。**首个挂正式构建而非 debug 包的 Release**，CI run `42806921756` 全绿，详见 **§25.7 / §26.8** |
 
 - `upstream-2.3.8` 分支在 CI 绿灯后 **fast-forward 合入 `main`**（`0e387d0..fd743ea`），
   tag `v0.8.0` 打在 `fd743ea`；之后若有纯文档提交，`main` 只领先 docs-only commit，代码相同。
@@ -2188,6 +2198,156 @@ CI 的 Gradle 下载加固与预热步骤。
 - **无性能妥协**：新增全是一次 quad 重建时的标量运算与一个状态面板 `String.format`，渲染循环零新增分配。
 - **CI 只能证明**：可编译、纯 JVM 几何不变量、能出 APK；真机画面效果仍需用户复测。
 
-### 25.7 CI 与正式版交付
+### 25.7 CI 与正式版交付（已完成）
 
-> 本节在本轮代码推送 / CI / Release 完成后补录（run ID、测试数、产物大小、Release ID、r9 导出包）。
+| 项 | 结果 |
+| --- | --- |
+| 视觉修复 CI | run `42805088350`，提交 `afbde5d`，两个 job 全绿；`8 suites / 138 tests / 0 failures / 0 errors / 0 skipped`（比合并版 `42796583030` 的 135 多 3 例，来自 `VrPassthroughGeometryTest` / `VrSettingsTest` / `VrMenuModelTest` 的新默认值与 40 组几何不变量）。产物 `opennow-vr-debug-arm64-v8a` 62078136 B、`cardboard-sdk-aar` 388092 B |
+| 正式构建 CI | run `42806921756`，提交 `aecf7e3`，两个 job 全绿（`build-cardboard-sdk-aar` + `vr-unit-tests-and-release-apk`）；`8 suites / 138 tests / 0 failures`，`BUILD SUCCESSFUL in 12m 32s`。详见 §26.8 |
+| 产物 | release APK **34109338 B**、debug APK **62078136 B**、`cardboard-sdk-aar` **388092 B**；两个 APK 都含 `lib/arm64-v8a/libcardboard_sdk_jni.so` 与 `libGfxPluginCardboard.so` |
+| Release | `v0.9.0` 正式版 / Stable，Release ID **`440293521`**，`prerelease=false`，tag @ `aecf7e3`，`https://github.com/XYkadicloud/OpenNOW-VR/releases/tag/v0.9.0` |
+| Release 资产（3 个） | `OpenNOW-VR-v0.9.0-arm64-v8a-release.apk`（唯一需安装的正式包）、`OpenNOW-VR-modules-20261110-r9.zip`、`cardboard-sdk-v1.36.0.aar`；**无任何 debug APK** |
+| r9 导出包 | **56 个 zip 条目**（`MANIFEST.txt` 正文列出 55 项 + 清单自身 = 56，与 r8 的 53+1=54 同一口径）：18 个 VR 核心 Kotlin + 9 个 App 接入点 + 9 个测试 + 5 个构建配置 + 4 个 SDK 参考源码 + 3 份项目文档 + 8 份根目录中文总表。新增 `src/config/app-proguard-rules.pro` 与 `06_真机复测与视觉修复说明.md`；`02_设置项全表.csv` / `04_默认设置.json` 的 `verticalFlip` 已同步为 `true`。31 个设置项、5 页 34 行菜单、13 个 2D 滑块不变 |
+| 历史版本 | `v0.7.0`（Stable / ID 438940588）与 `v0.8.0`（Pre-release / ID 440214109）保持原样，不覆盖 |
+
+**仍未完成的只有真机复测**：新装 / 恢复默认后串流是否正立、透视在 AUTO / 90 / 180 / 270 ×
+4:3 / 16:9 下是否都不拉伸（状态面板第二行「比例 x.xx（应 x.xx）」两数一致即无拉伸）、
+以及从旧 debug 包覆盖安装 release 包后 31 个设置与登录是否都还在（验证 §26.5 的 keep 规则）。
+CI 抓不到 GLSL 运行时编译与 R8 之后的实际 JNI / 枚举读取行为。
+
+## 26. 2026-11-10 正式版改为 release 构建（用户明确要求）
+
+### 26.1 用户诉求（原话）
+
+> 「说明一下我要的正式版本哦，而不是 debug 版本。」
+
+这一句把「正式版」的定义从「Release 页面 `prerelease=false`」纠正为
+**构建类型本身**：此前几版的资产是 `assembleDebug` 调试包，即使标成
+Stable 也仍然是 debug 构建。用户要的是 `assembleRelease` 正式构建。
+助手没有把 `v0.8.0` 直接转 Stable，而是先按此改造构建链再发 `v0.9.0`。
+
+### 26.2 此前状态（如实记录）
+
+| Release | 发布通道 | APK 资产 | 构建类型 |
+| --- | --- | --- | --- |
+| v0.5.0 / v0.6.0 | Pre-release | `app-arm64-v8a-debug.apk` | `assembleDebug` |
+| v0.7.0 | **Stable / 正式版** | `app-arm64-v8a-debug.apk` | `assembleDebug` |
+| v0.8.0 | Pre-release | `app-arm64-v8a-debug.apk` | `assembleDebug` |
+
+即「v0.7.0 正式版」只是发布通道正式，产物仍是调试包。
+`android/app/build.gradle.kts` 里 `buildTypes.release` 虽然一直存在
+（`isMinifyEnabled = true` / `isShrinkResources = true` / proguard），
+但**没有任何 signingConfig**，直接 `assembleRelease` 得到的是
+`app-release-unsigned.apk`，不能安装；CI 也从未构建过 release。
+
+### 26.3 构建侧改动（提交 `aecf7e3`）
+
+| 文件 | 改动 |
+| --- | --- |
+| `android/keystore/release.keystore` | 新增。`debug.keystore` 的逐字节副本，两者 SHA-256 同为 `e90d7358…581ff` |
+| `android/app/build.gradle.kts` | `signingConfigs` 新增 `create("release")`；`buildTypes.release` 指定 `signingConfig = signingConfigs.getByName("release")` |
+| `android/app/proguard-rules.pro` | 追加 Cardboard JNI 与 VR 包 / 枚举的 keep 规则（见 26.5） |
+| `.github/workflows/vr-build.yml` | job 更名 `vr-unit-tests-and-release-apk`；构建命令加 `:app:assembleRelease`；分别收集两个 APK；新增 `apksigner verify` + `aapt dump badging` 守卫；新增 `opennow-vr-release-arm64-v8a` 工件 |
+
+### 26.4 签名策略：刻意沿用同一把 key
+
+`release.keystore` 不是新密钥，是仓库内 checked-in 侧载密钥的副本。理由写在
+`build.gradle.kts` 原注释里：Gradle 在全新 CI runner 上会临时生成
+`~/.android/debug.keystore`，每次签名都不同，`adb install -r` 会
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`，用户必须卸载 → 丢掉已保存登录。
+沿用同一把 key 后：
+
+- 真机上从 v0.7.0 / v0.8.0 的 debug 包**直接覆盖安装** release 包；
+- 不会因为卸载丢登录、丢 SharedPreferences 里 31 个 VR 设置；
+- 换个文件名只是让 `signingConfigs.release` 语义自解释，不是换签名。
+
+**构建类型（release/debug）与签名密钥是两件独立的事**，接手的 Agent
+不要为了「看起来更正式」去换一把新 key。
+
+### 26.5 R8 打开后暴露的两个真机级风险
+
+`assembleDebug` 从不跑 R8，所以下面两个问题此前从未出现；一旦发正式包
+就会在真机上暴露，必须靠 `app-proguard-rules.pro` 兜住：
+
+1. **Cardboard SDK 静态 JNI 注册**。
+   `third_party/cardboard/java_api/...` 里有大量 `native*` 方法
+   （`nativeInitialize`、`nativeHeadTrackerCreate`、
+   `nativeDistortionRendererRenderEyeToDisplay` …），JNI 靠完整类名 +
+   方法名查找。AAR 的 consumer 规则
+   `third_party/cardboard/sdk/proguard-rules.pro` 只保留
+   `@UsedByNative` 成员与 proto；`java_api/proguard-rules.pro` 里那句
+   `-keep class com.google.cardboard.sdk.** { *; }` 并没有随 AAR 生效。
+   混淆后 `System.loadLibrary` 仍成功，但每次 JNI 调用都会失败 → 进 VR 闪退。
+   规则：`-keep class com.google.cardboard.sdk.** { *; }`、
+   `-keep class com.google.cardboard.proto.** { *; }`。
+2. **VR 设置用枚举名持久化**。
+   `VrSettingsStore` 对 8 个枚举（viewerMode / screenFillMode /
+   passthroughCameraFacing / passthroughAspect / passthroughMode /
+   passthroughResolution / passthroughFrameRate / passthroughRotation）
+   执行 `prefs.getString(..., DEFAULT.x.name)` → `Enum.valueOf(...)`，
+   写入用 `.name`。R8 允许重命名枚举常量：旧 pref 里的 `"FOUR_THREE"`
+   在新包里 `valueOf` 会抛 `IllegalArgumentException`，或把 31 个设置
+   静默重置回默认。
+   规则：`-keep class com.opencloudgaming.opennow.vr.** { *; }` +
+   `-keepclassmembers enum com.opencloudgaming.opennow.vr.** { *; }`。
+   VR 包很小，全量 keep 对包体几乎无影响。
+
+### 26.6 CI 校验链
+
+- `:app:assembleDebug` + `:app:assembleRelease` +
+  `:app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"` 同一次 Gradle 调用；
+- 收集时用 `find ... -print -quit` 分别取两个 APK（`-print -quit` 避免
+  `find | head` 在 `set -o pipefail` 下的 SIGPIPE 假失败），并显式排除
+  `*unsigned*`；没有已签名 release APK 直接 fail；
+- `apksigner verify --verbose --print-certs`：确认正式包已签名；
+- `aapt dump badging | grep application-debuggable`：有该标记即 fail；
+  若 build-tools 没带 `aapt` 则打印说明后跳过，不静默略过；
+- 两个 APK 都过 `lib/arm64-v8a/libcardboard_sdk_jni.so` +
+  `lib/arm64-v8a/libGfxPluginCardboard.so` 守卫；
+- 分别上传 `opennow-vr-release-arm64-v8a` 与
+  `opennow-vr-debug-arm64-v8a`，后者只作诊断备用，**不进 Release 资产**。
+
+> 注意：CI 的 job 1 仍然编 `sdk-debug.aar`，因为 Cardboard SDK 自己的
+> `release` buildType 开了 minify 会混淆公开 Java API。那是**第三方依赖库**，
+> 不是 App 安装包；v0.9.0 资产改名为 `cardboard-sdk-v1.36.0.aar` 以免误读。
+
+### 26.7 发布口径
+
+- `v0.9.0`：正式版 / Stable，`prerelease=false`；
+- 资产只有 3 个：`OpenNOW-VR-v0.9.0-arm64-v8a-release.apk`、
+  `cardboard-sdk-v1.36.0.aar`、`OpenNOW-VR-modules-20261110-r9.zip`；
+- **不再挂任何 debug APK**；`v0.7.0`（Stable）与 `v0.8.0`（Pre-release）
+  保持原样不覆盖；
+- r9 导出包新增 `src/config/app-proguard-rules.pro`，并在
+  `00_先看这个.txt` / `01_模块与设置总表.md §10` /
+  `06_真机复测与视觉修复说明.md §7` 完整说明正式构建。
+
+### 26.8 验证结论（CI run `42806921756`，全部通过）
+
+| 检查项 | 实测输出 |
+| --- | --- |
+| 两个 job | `build-cardboard-sdk-aar` **success**；`vr-unit-tests-and-release-apk` **success** |
+| Gradle | `:app:assembleDebug` + `:app:assembleRelease` + `:app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"` 一次调用，`BUILD SUCCESSFUL in 12m 32s` |
+| JVM 单测 | `VR JVM test suites: 8 \| tests: 138 \| failures: 0 \| errors: 0 \| skipped: 0`（8 个 XML：`VrGamepadRouterTest` / `VrHeadPoseTest` / `VrMatrix4Test` / `VrMenuModelTest` / `VrPassthroughGeometryTest` / `VrScreenGeometryTest` / `VrSettingSpecTest` / `VrSettingsTest`） |
+| APK 收集 | `'app/build/outputs/apk/release/app-release.apk' -> '../out/app-arm64-v8a-release.apk'`（**不是 unsigned**）；debug 同理。release **34109338 B**、debug **62078136 B** |
+| `apksigner verify --verbose --print-certs` | `Verifies`；`v1: false`、**`v2: true`**、`v3/v3.1/v3.2/v4: false`；`Number of signers: 1`；`V2 Signer: certificate DN: CN=Android Debug, O=Android, C=US`；证书 SHA-256 `0bcbbebde80cf7b95e3b6dd904edc52fb2cfd72e6eb2bf69b682e082f354f751`；RSA 2048 |
+| 本地双向指纹核对 | `keytool -list -v` 对 `android/keystore/release.keystore` 与 `debug.keystore` 均得 `Owner: CN=Android Debug, O=Android, C=US` / SHA-256 `0B:CB:BE:BD:E8:0C:F7:B9:5E:3B:6D:D9:04:ED:C5:2F:B2:CF:D7:2E:6E:B2:BF:69:B6:82:E0:82:F3:54:F7:51`，**与 apksigner 报的证书摘要完全一致** —— 同一把 key、覆盖安装兼容是实测而非推断 |
+| `aapt dump badging` | `package: name='com.opencloudgaming.opennow' versionCode='193' versionName='2.3.8' platformBuildVersionName='17'`；grep 未命中 `application-debuggable`，打印 `release APK is NOT debuggable` |
+| 双 APK JNI 守卫 | 两个 APK 的 native libs 列表都含 `lib/arm64-v8a/libcardboard_sdk_jni.so` 与 `lib/arm64-v8a/libGfxPluginCardboard.so`（另有 `libandroidx.graphics.path.so` / `libjingle_peerconnection_so.so` / `liblanguage_id_l2c_jni.so` / `libopennow_native.so` / `libopennow_nvst.so`） |
+| 上传工件 | `opennow-vr-release-arm64-v8a` 20877429 B、`opennow-vr-debug-arm64-v8a` 47686886 B、`vr-unit-test-report` 30844 B、`cardboard-sdk-aar` 385622 B |
+| 本地解包复核 | 下载后的 release APK 内含两个 Cardboard `.so`；`v1` 签名文件为空是正常的（v2 签名在 APK Signing Block，不在 ZIP 条目里），以 CI 的 `apksigner verify` 为准 |
+| Release | `v0.9.0` / Stable / ID `440293521` / `prerelease=false`；3 个资产，无 debug APK |
+| r9 导出包 | 56 个文件，含新增的 `src/config/app-proguard-rules.pro` 与 `06_真机复测与视觉修复说明.md` |
+
+**结论**：用户要的「正式版本，而不是 debug 版本」在构建链、签名、CI 守卫、发布资产
+四个层面都已落实且可验证。唯一仍属推断的是 **R8 之后的运行时行为**（JNI 调用是否真能
+落到保留下来的类、`Enum.valueOf` 能否读回旧 pref）—— 这两点只能靠用户覆盖安装后复测，
+不能因为 CI 全绿就写成「已验证」。
+
+### 26.9 行为约束复核
+
+- **不改 shader**：本轮零 Kotlin / GLSL 渲染路径改动，只动 Gradle、
+  proguard 规则与 CI YAML；
+- **全部可调**：31 个设置项与 5 页 34 行菜单一个没删；
+- **真机边界**：CI 新增的守卫能证明「已签名 / 非 debuggable / 带 JNI 库」，
+  但 R8 后的实际运行行为（尤其 JNI 调用与设置读取）仍需用户覆盖安装后复测。

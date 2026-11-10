@@ -42,13 +42,16 @@
 | **重置中心点（头部追踪校准）** | **已实现**：把当前头朝向记为新的正前方；`VrHeadPose` 计算 `current * conj(center)` 相对旋转；VR 菜单动作项 + 手机设置页按钮均可触发 |
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
 | **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。**注意：window flags 只解决系统栏/刘海，消不掉截图里那种上下大黑边** —— 那来自 Cardboard 畸变 mesh 的 FOV 截断，由上面的 `screenFillMode` 解决 |
-| 真机 / 纸盒 / GFN 串流效果 | **真机反馈确认可用后又反馈失败，已第二轮修复**：`f77f482` 真机 logcat 定案「进 VR 啥也没有」是 `VrModeHost` 竞态，层级修复后用户确认「现在的确能使用了」。但随后 `7a9abfb` 版真机截图暴露：基础状态面板被 180° 反转、串流朝向不对、辅助线贴在 VR 面板里跟头转、状态栏仍显示。**这些画面效果已重新实现（见 §4 与 `HANDOFF.md` §13），全部待真机复测**。CI 只能证明「能编译 + 单测通过 + 能出 APK」，GLSL 运行时编译与视觉朝向 CI 抓不到 |
+| 真机 / 纸盒 / GFN 串流效果 | **2026-11-10 已完成完整真机复测**：VR 场景显示、串流中途切 VR、菜单 10 行滚动与关闭后焦点回游戏、系统返回键退出、相机权限、手柄长按组合键、串流 / 状态面板方向均确认可用（§2.2）；历史 `f77f482` 的 `VrModeHost` 竞态与 `7a9abfb` 的画面朝向 / 辅助线层级问题已在 §4 与 `HANDOFF.md §13` 重新实现并被复测覆盖。**当前待复测的只剩本轮两个视觉修复与 release 正式包经 R8 后的 JNI / 设置读取行为**。CI 只能证明「能编译 + 138 个 JVM 单测通过 + 出两个 APK + 正式包已签名非 debuggable」，GLSL 运行时编译与 R8 后的运行行为抓不到 |
 | **上游源码基线** | **已合并官方 2.3.8**（`OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`，`versionCode=193`）：81 个文件三方合并，VR 全部功能完整保留；合并后 CI run `42796583030` 两 job 全绿、`8 suites / 135 tests / 0 failures`，详见 §2.1、§5.1 与 `HANDOFF.md §24` |
 | **合并版真机复测** | **已完成（2026-11-10）**：串流中途切 VR、菜单滚动、焦点回游戏、返回键退出、相机权限、手柄长按组合键全部确认可用；另发现并已修复「串流默认上下颠倒」「透视拨正后仍拉伸」两个视觉缺陷，详见 **§2.2** |
+| **正式版构建类型** | **已切换（2026-11-10）**：v0.5.0 ~ v0.8.0 挂的都是 `assembleDebug` 调试包（`debuggable=true` / 无 R8）；按用户明确要求「要正式版本，而不是 debug 版本」，v0.9.0 起改挂 `:app:assembleRelease` **已签名、非 debuggable、R8 minify + shrinkResources** 的正式包，CI 用 `apksigner verify` + `aapt dump badging` 强校验，详见 **§2.3** |
+| **正式版发布** | **已发布 `v0.9.0` / Stable**（2026-11-10，Release ID `440293521`，`prerelease=false`，tag @ `aecf7e3`）：3 个资产 `OpenNOW-VR-v0.9.0-arm64-v8a-release.apk`（**唯一需安装的正式包**）、`OpenNOW-VR-modules-20261110-r9.zip`、`cardboard-sdk-v1.36.0.aar`；CI run `42806921756` 全绿。历史 `v0.7.0`（Stable）/ `v0.8.0`（Pre-release）保持原样不覆盖 |
 
 > 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端与 VR 内手柄设置面板、
 > 可导入的 360° 背景、瞳距调节、重置中心点、强制横向真全屏、串流中途切 VR、菜单滚动与焦点恢复均已完成并经真机确认；
-> 串流默认朝向与透视窗口比例已按 2026-11-10 真机反馈修复（§2.2），剩下的是这两个修复的最新一轮真机画面复测**。
+> 串流默认朝向与透视窗口比例已按 2026-11-10 真机反馈修复（§2.2），发布产物也已改成 release 正式构建（§2.3），
+> 剩下的是这两个修复 + R8 正式包的最新一轮真机画面复测**。
 > 接手的 Agent 请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)（项目位置 / 状态 / 待办 / 文档索引），
 > 技术事实基线见 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)。
 
@@ -134,6 +137,59 @@
 
 **③ 仍必须由真机确认**：GLSL shader 运行时编译、纸盒畸变观感、陀螺仪、低端机帧率与发热，
 以及本轮两个修复的实际画面效果。CI 只能证明可编译 + 纯 JVM 几何不变量 + 能出 APK。
+
+### 2.3 正式版 = release 构建，不是 debug 包（2026-11-10 用户明确要求）
+
+用户原话：「**说明一下我要的正式版本哦，而不是 debug 版本**」。
+此前 v0.5.0 / v0.6.0 / v0.7.0 / v0.8.0 四个 Release 里挂的
+`app-arm64-v8a-debug.apk` 全部是 `:app:assembleDebug` 调试产物。
+从 **v0.9.0** 起，正式版改挂 `assembleRelease` 产物：
+
+| 项目 | 旧 debug 包（≤ v0.8.0） | 正式包（v0.9.0 起） |
+| --- | --- | --- |
+| Gradle task | `:app:assembleDebug` | `:app:assembleRelease` |
+| `android:debuggable` | `true` | **`false`** |
+| `BuildConfig.DEBUG` | `true` | **`false`** |
+| R8 minify / shrinkResources | 关闭 | **开启** |
+| 签名 | 有（checked-in debug key） | **有（`signingConfigs.release`）** |
+| CI 校验 | APK 内 JNI `.so` | JNI `.so` + `apksigner verify` + `aapt` 确认非 debuggable |
+| Release 资产名 | `app-arm64-v8a-debug.apk` | `OpenNOW-VR-v0.9.0-arm64-v8a-release.apk` |
+
+**签名策略**：`android/keystore/release.keystore` 是仓库内已提交的侧载密钥的
+**逐字节副本**（SHA-256 相同，同一把 key）。这是刻意的 —— 已经装过旧 debug 包的
+机器可以直接 `adb install -r` 覆盖安装，不会
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`，也不用卸载、不会丢掉已保存的登录。
+换文件名只是让 release 配置语义清楚；**区分正式 / 调试的是 buildType，不是密钥**。
+
+**R8 打开后必须补的两条 keep 规则**（`android/app/proguard-rules.pro`）：
+
+1. `-keep class com.google.cardboard.sdk.** { *; }` —— Cardboard SDK 用静态 JNI
+   注册（`nativeInitialize`、`nativeHeadTrackerCreate`、
+   `nativeDistortionRendererRenderEyeToDisplay` …），AAR 自带的 consumer 规则只
+   保留 `@UsedByNative` 成员。类名 / 方法名被混淆后 `System.loadLibrary` 仍会成功，
+   但每一次 JNI 调用都会失败（进 VR 闪退）。
+2. `-keep class com.opencloudgaming.opennow.vr.** { *; }` +
+   `-keepclassmembers enum ...` —— `VrSettingsStore` 把 8 个枚举以 `Enum.name`
+   写进 SharedPreferences、再用 `Enum.valueOf()` 读回。R8 可以重命名枚举常量，
+   旧 pref 会直接抛 `IllegalArgumentException`，或把 31 个设置静默重置回默认。
+
+> ⚠️ 容易混淆的一点：CI 的 **job 1 仍然编 `sdk-debug.aar`**（Cardboard SDK 的
+> `release` buildType 开了 minify，会混淆它的公开 Java API，不能用）。那是**第三方
+> SDK 依赖库**，不是 App 安装包；`v0.9.0` 资产里改名为
+> `cardboard-sdk-v1.36.0.aar` 以免再被误读成 debug 版 App。构建类型说的是 App。
+
+**CI 实测结论（run `42806921756`，提交 `aecf7e3`）**：两个 job 全绿，
+`8 suites / 138 tests / 0 failures`，`BUILD SUCCESSFUL in 12m 32s`。
+`apksigner` 输出 `Verifies`、`v2 scheme: true`、`Number of signers: 1`、
+证书 `CN=Android Debug, O=Android, C=US`、SHA-256
+`0bcbbebde80cf7b95e3b6dd904edc52fb2cfd72e6eb2bf69b682e082f354f751` —— 与
+`release.keystore` / `debug.keystore` 的 `keytool -list -v` 指纹逐字节一致，
+因此「同一把 key、可直接覆盖安装」不是推断，是实测。`aapt dump badging` 输出
+`versionCode='193' versionName='2.3.8'` 且 `release APK is NOT debuggable`。
+正式包 **34109338 B**，debug 包 **62078136 B**（R8 + shrinkResources 后小约 45%）。
+
+**真机复测时额外确认一条**：从旧 debug 包覆盖安装后，31 个设置项与登录状态
+都还在 —— 这直接验证上述 R8 keep 规则生效。详见 `docs/HANDOFF.md §26`。
 
 ### 骨架刻意做成的「零影响」特性
 
@@ -491,12 +547,17 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 
 两个 job：
 
-1. `build-cardboard-sdk-aar`：从 `third_party/cardboard/` 用独立 Gradle 工程编出 `sdk-debug.aar`。
-2. `vr-unit-tests-and-debug-apk`：把 AAR 下载到 `android/app/libs/cardboard-sdk.aar`，
-   跑 `:app:assembleDebug` 与 `:app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"`，
-   产出 `opennow-vr-debug-arm64-v8a` APK 工件。
+1. `build-cardboard-sdk-aar`：从 `third_party/cardboard/` 用独立 Gradle 工程编出 `sdk-debug.aar`
+   （SDK 侧只能用 debug，见 §2.3 末尾说明）。
+2. `vr-unit-tests-and-release-apk`：把 AAR 下载到 `android/app/libs/cardboard-sdk.aar`，
+   跑 `:app:assembleDebug` + **`:app:assembleRelease`** +
+   `:app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"`；
+   分别产出 `opennow-vr-debug-arm64-v8a`（诊断备用）与
+   **`opennow-vr-release-arm64-v8a`（正式版唯一发布产物）** 两个 APK 工件。
+   正式包额外过 `apksigner verify --print-certs`（必须已签名）与
+   `aapt dump badging`（不得含 `application-debuggable`）两道守卫。
 
-> **测试范围说明**：CI 只跑本 fork 新增的 6 个 VR 测试类。上游项目另外自带 167 个 JVM 测试，
+> **测试范围说明**：CI 只跑本 fork 新增的 8 个 VR 测试类（138 个用例）。上游项目另外自带 167 个 JVM 测试，
 > 它们引用了 `android.*` 框架类却既没有 Robolectric、也没有 `unitTests.returnDefaultValues`，
 > 且上游 CI 从未执行过它们。把它们纳入会导致与本改动无关的失败，因此暂不启用。
 
@@ -542,11 +603,17 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 | **`42572527294`** | **`e00287a`** | **成功** | **r6 首次真正编译通过**。① CI 加固：两个 wrapper 改 `networkTimeout=120000` / `retries=5` / `retryBackOffMs=2000`，`vr-build.yml` 两个 job 各加「发行包预热」步骤；两次下载超时不再拖红整条流水线。② 首次完整验证 `38378f6` + `9401ef0` 的 r6 业务代码：摄像头方向 / 拉伸 / 不协调修复、分辨率 4 档、帧率 15/30/60 三档、旋转 / 镜像 / 钉在眼前、31 个设置项、34 行菜单、状态面板诊断全部 Kotlin 编译通过。③ 两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`7 suites / 125 tests / 0 failures / 0 errors / 0 skipped`，`BUILD SUCCESSFUL in 9m 11s`。产物 `opennow-vr-debug-arm64-v8a` 47603818 B、`cardboard-sdk-aar` 385622 B。**透视真机效果仍待复测**（见 §3.8） |
 | **`42590354856`** | **`ac584b7`** | **成功** | **r7 修复竖屏 9:16 / 拉伸 / 菜单溢出**。① 窗口比例与旋转解耦：AUTO=0、窗口恒横向 4:3/16:9、真实预览比例只决定居中 UV 裁切；`VrPassthroughGeometry.kt` 纯几何 + JVM 单测锁定。② Camera2 优先挑横向预览尺寸并归一化，杜绝竖屏缓冲尺寸。③ VR 菜单改为 `visibleWindowFor()` 可见 10 行窗口 + 右侧滚动条 + 计数，环境页 13 行现在能走到底。两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`。产物 `opennow-vr-debug-arm64-v8a` 61995484 B、`cardboard-sdk-aar` 388092 B。**真机效果待复测**（见 §3.8） |
 | **`42796583030`** | **`71b5dd5`** | **成功** | **上游 2.3.8 合并验证**（分支 `upstream-2.3.8`）：官方 `OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`（`versionCode=193` / `versionName="2.3.8"`）做 file-level 三方合并，81 个文件 = 57 直接采用 + 13 新增 + 11 三方合并（9 自动 / 2 人工），合并提交相对 `main` 为 **13 新增 + 71 修改**；采用 Gradle 9.8.2 但保留 CI 下载加固。两处人工冲突：`OpenNowStreamControls.kt` 以官方全文为准重新注入 `onEnterVr` 与「进入 VR」按钮、wrapper 保留 `networkTimeout=120000 / retries=5`。两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`（与 r7 逐项一致）。产物 `opennow-vr-debug-arm64-v8a` **62078136 B**、`cardboard-sdk-aar` **388092 B**。**VR 26 个专属源码 / 单测文件在合并前后逐字节未变**（`git diff --stat main..upstream-2.3.8 -- .../vr/` 输出为空）。**合并版真机效果待复测**；`v0.7.0` 正式版仍是已验证基线（详见 §2.1 与 `HANDOFF.md §24`） |
+| `42805088350` | `afbde5d` | **成功** | **2026-11-10 真机复测后两个视觉修复**：`verticalFlip` 默认改 `true`（串流 OES V 轴天然倒置）；`VrPassthroughGeometry` 新增 `bufferCrop()`（90/270 交换裁切轴）与 `sampledAspect()`、`VrPassthroughCamera` 删除 `normaliseLandscape()` 并原样上报真实 W/H；状态面板打印「采样 U/V / 比例 x.xx（应 x.xx）」；`VrPassthroughGeometryTest` 扩到 10 个用例、40 组几何不变量，`VrSettingsTest` / `VrMenuModelTest` 同步新默认值。两 job 全绿（AAR + JNI 守卫、JVM 单测 + debug APK），`8 suites / 138 tests / 0 failures`。详见 §2.2 与 `HANDOFF.md §25` |
+| **`42806921756`** | **`aecf7e3`** | **成功** | **正式版构建链首次全绿 / v0.9.0 基线**：① `build.gradle.kts` 新增 `signingConfigs.release` 并把 `buildTypes.release` 接上；新增 `android/keystore/release.keystore`（`debug.keystore` 逐字节副本，同一把 key）；`proguard-rules.pro` 补 Cardboard JNI 与 VR 包 / 枚举的 keep 规则。② CI job 2 更名 `vr-unit-tests-and-release-apk`，一次 Gradle 调用同时跑 `:app:assembleDebug` + `:app:assembleRelease` + 8 个 VR 测试类。③ 新守卫实测通过：`apksigner verify --print-certs` → `Verifies` / `v2 scheme: true` / `Number of signers: 1` / 证书 `CN=Android Debug`、SHA-256 `0bcbbebd…f751`（与两个 keystore 指纹逐字节一致，证明旧 debug 包可直接覆盖安装）；`aapt dump badging` → `package: name='com.opencloudgaming.opennow' versionCode='193' versionName='2.3.8'`、`release APK is NOT debuggable`；两个 APK 均含 `libcardboard_sdk_jni.so` 与 `libGfxPluginCardboard.so`。④ `8 suites / 138 tests / 0 failures / 0 errors / 0 skipped`，`BUILD SUCCESSFUL in 12m 32s`。产物：release APK **34109338 B**（R8 后比 debug 小 45%）、debug APK **62078136 B**、`cardboard-sdk-aar` **388092 B**。⑤ 发布 `v0.9.0` 正式版（Release ID `440293521`，`prerelease=false`），3 个资产：正式 release APK、r9 模块导出包、`cardboard-sdk-v1.36.0.aar`；**不再挂 debug APK**。详见 §2.3 与 `HANDOFF.md §26` |
 
-> **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
+> **真机提示（历史待办，已于 2026-11-10 复测完成，见 §2.2；保留作排查记录）**：
+> 下面这份清单写于 `d09f94f` 时代，左摇杆选行 / HAT 十字键 / A 编辑态 / 退出 / 全屏 /
+> 基础 UI 朝向 / 瞳距 / 重置中心点 / 三个入口 / 长按可靠性等项目**已由用户真机确认可用**，
+> 不再是待办。当前只剩 §2.2 两个视觉修复与 §2.3 release 正式包的复测。
+> run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；
 > 「进 VR 啥也没有」由 `9c9cbc7` 修复 `VrModeHost` 竞态解决，用户已确认 VR 场景能正常显示。
-> **当前剩余的是真机复测（`d09f94f`）**：① 左摇杆上下（未按 `A`）能否顺畅选行、按住连选节奏是否合适；
+> **历史复测清单（`d09f94f`）**：① 左摇杆上下（未按 `A`）能否顺畅选行、按住连选节奏是否合适；
 > ② 十字键若为 `AXIS_HAT_Y` 能否选行且不连发；③ 按 `A` 后摇杆是否只改数值、按 `B` 返回后
 > 是否立刻恢复选行；④ 退出：`L1+R1` 在 VR 内**不再退出**、手机返回键与菜单「快捷 → 退出 VR」
 > 两条是否都可用；⑤ **全屏**：`zoomScale = 1.35` 时上下黑边是否真的被顶掉；若仍有，继续上调到
@@ -564,10 +631,15 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 要点：
 
 - **只能用 `assembleDebug` 编 SDK**：上游 `release` 开了 `minifyEnabled true`，会混淆公开 Java API。
+  **这只约束第三方 Cardboard SDK 依赖库，不影响 App 侧的 `assembleRelease` 正式构建**。
+- **App 正式包**：`signingConfigs.release` 指向 `android/keystore/release.keystore`
+  （checked-in 侧载密钥的逐字节副本，同一把 key → 旧 debug 安装可直接覆盖）；
+  `app-proguard-rules.pro` 保留 Cardboard JNI 类与 VR 枚举名，否则 R8 会让进 VR 闪退或重置设置。
 - Cardboard SDK **没有 Maven 坐标**，所以主工程用 `implementation(files("libs/cardboard-sdk.aar"))`，
   并显式补上 AAR 不带 POM 的 5 个传递依赖。
 - `android/app/libs/*.aar` **不入库**，由 CI 生成；本地要编需先跑 job 1 再手动拷过去。
-- 两个 Gradle 构建互相独立：主工程 AGP 9.4.0 / Gradle 9.7.1，SDK 工程 AGP 9.2.0 / Gradle 9.8.0。
+- 两个 Gradle 构建互相独立：主工程 AGP 9.4.0 / **Gradle 9.8.2**（上游 2.3.8 合并后），
+  SDK 工程 AGP 9.2.0 / Gradle 9.8.0。
 - `-Popennow.abis=arm64-v8a` + 环境变量 `OPENNOW_ABIS=arm64-v8a` 同时给，用来收窄 Rust NVST 目标。
 
 从源仓库带过来的 4 条发布/扫描流水线已移到 `docs/upstream-workflows/` 作为参考保留，
@@ -577,9 +649,11 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 
 ## 6. 已知限制
 
-1. CI 只能证明可编译 + JVM 单测通过 + 能出 APK；**GLSL shader 是运行时编译，CI 完全抓不到**。
+1. CI 只能证明可编译 + JVM 单测通过 + 能出 debug/release 两个 APK + 正式包已签名且非 debuggable；
+   **GLSL shader 是运行时编译，CI 完全抓不到**，R8 混淆后的 JNI 调用与设置读取也要真机才验得了。
    **纸盒畸变观感、陀螺仪、低端机帧率与发热仍需真机验证**；串流画面、2D 面板文字方向、手柄手感、
-   菜单滚动、焦点恢复、返回键退出已由 2026-11-10 真机复测确认（§2.2），本轮两个视觉修复的效果仍待复测。
+   菜单滚动、焦点恢复、返回键退出已由 2026-11-10 真机复测确认（§2.2），本轮两个视觉修复与
+   release 正式包的效果仍待复测（§2.3）。
 2. VR APK 只出 `arm64-v8a`；x86 模拟器跑不了 Cardboard 原生库。
 3. Cardboard SDK 的 manifest 要求 OpenGL ES 3.0，极老设备会被过滤。
 4. HDR 路径未针对 VR SurfaceTexture 单独验证。`Streaming.kt` 的

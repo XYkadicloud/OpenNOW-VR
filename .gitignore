@@ -66,3 +66,11 @@ result
 # Never commit the generated binary or local SDK paths.
 /android/app/libs/*.aar
 **/local.properties
+
+# Release staging / module export packages are generated locally and uploaded to the
+# GitHub Release as assets; they are not source files.
+/_release_assets/
+/OpenNOW-VR-modules-*.zip
+/__pycache__/
+/.build_vr_export_*.py
+/.publish_v*.py
