@@ -2005,6 +2005,15 @@ r7 代码（`ac584b7`）**首次在 CI 完整编译通过**，无任何非代码
   合入 `locales/en.json` 后自动齐备。
 - `git -c core.whitespace=cr-at-eol diff --check` 干净；上游 `gradlew.bat` 是
   CRLF（Windows 批处理正确）、`gradlew` 是 LF（Linux 可执行），均保持原样。
+- **VR 专属目录零差异复核**（`git diff --stat main..upstream-2.3.8 -- .../vr/`）：
+  `android/app/src/main/java/.../vr/` 与 `android/app/src/test/java/.../vr/` 两个目录
+  **输出为空**，即 26 个 VR 专属源码 / 单测文件在合并后逐字节未变；
+  合并提交相对 `main` 共 84 个文件变更 = **13 个新增 + 71 个修改**，全部落在
+  上游 2.3.8 的非 VR 文件与共享集成文件上。这是「VR 全部功能完整保留」最直接的证据。
+- 9 个主要合并文件做花括号配平 sanity check（`build.gradle.kts` 37/37、
+  `OpenNowScreens.kt` 441/441、`OpenNowSettingsScreens.kt` 450/450、
+  `OpenNowStreamControls.kt` 483/483、`OpenNowStreamSurface.kt` 433/433、
+  `Streaming.kt` 1297/1297 等）全部平衡 —— 仅结构检查，**不能替代编译器**。
 - 本机无 Android SDK / JDK 17（只有 Java 8），**编译验证只能在 GitHub CI 上做**。
 
 ### 24.6 保留与采用清单
@@ -2027,13 +2036,40 @@ CI 的 Gradle 下载加固与预热步骤。
 | --- | --- |
 | v0.7.0 转正式版 | **已完成**：`prerelease=false`，3 个资源 `state=uploaded`，用户真机复测通过 |
 | 三方合并 + 完整性校验 | **已完成**（见 24.5） |
-| **CI 全量编译 + JVM 单测 + 出 APK** | 见 §24.8 |
+| **CI 全量编译 + JVM 单测 + 出 APK** | **已通过**：run `42796583030`，两个 job 全绿、`8 suites / 135 tests / 0 failures`，详见 §24.8 |
 | **真机复测合并后的 VR** | **待办**：上游 Kotlin 全量重编译后，VR 入口、串流画面、透视窗口、菜单滚动、手柄输入都需重新确认 |
 | 再往后的上游版本 | **仍无可合并源码**，维持现状 |
 
-### 24.8 CI 验证结论
+### 24.8 CI 验证结论（已通过）
 
-（待 CI 结果出来后补写，含 run id、两个 job 结论、测试数、产物字节数。）
+在 `upstream-2.3.8` 分支 `71b5dd51` 上手动 `workflow_dispatch` 触发
+`.github/workflows/vr-build.yml`，run **`42796583030`**，结论 **success**：
+<https://github.com/XYkadicloud/OpenNOW-VR/actions/runs/42796583030>
+
+| job | 结论 | 起止（UTC，2026-11-10） |
+| --- | --- | --- |
+| `build-cardboard-sdk-aar` | **success** | 10:08:25 → 10:09:41 |
+| `vr-unit-tests-and-debug-apk` | **success** | 10:09:43 → 10:18:58 |
+
+- **JVM 单测**：`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`，
+  与合并前 r7（run `42590354856`）**逐项一致**：`VrGamepadRouterTest` 35、
+  `VrHeadPoseTest` 13、`VrMatrix4Test` 18、`VrMenuModelTest` 34、
+  `VrPassthroughGeometryTest` 6、`VrScreenGeometryTest` 11、
+  `VrSettingSpecTest` 9、`VrSettingsTest` 9。上游 2.3.8 的 Kotlin 全量重编译
+  没有破坏任何 VR 单测。
+- **产物**：`opennow-vr-debug-arm64-v8a` → `app-arm64-v8a-debug.apk`
+  **62078136 B**（artifact zip 47686876 B）；
+  `cardboard-sdk-aar` → `sdk-debug.aar` **388092 B**（zip 385622 B）；
+  `vr-unit-test-report` 30502 B。APK 比 r7 的 61995484 B 增 82652 B，
+  来自上游 2.3.8 新增类与资源。
+- 两道二进制守卫通过：AAR 与 APK 均含 `libcardboard_sdk_jni.so`。
+- `gradle-9.8.2` 在保留 `networkTimeout=120000 / retries=5 / retryBackOffMs=2000`
+  的前提下一次下载成功，未再出现 `42570810255` / `42571202478` 的超时假红。
+- 本机无 Android SDK / JDK 17（只有 Java 8），以上结论**全部来自 GitHub Actions**，
+  不是本地编译；CI 也**不能**证明 GLSL shader 运行时编译、真机画面与手柄手感。
+
+> CI 只证明「可编译 + JVM 单测通过 + 能出 APK」。合并版仍需真机复测（见 §24.7），
+> 因此 `v0.7.0` 正式版保持不动，合并版单独以 Pre-release 交付，不冒充稳定版。
 
 > **回退路径**：`v0.7.0` 的 tag / Release / APK / r7 导出包均在，
 > 若合并版本真机不可用，可直接回退到 `0e387d0`（`v0.7.0`）这个已验证基线。

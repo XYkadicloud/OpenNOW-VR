@@ -43,7 +43,7 @@
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
 | **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。**注意：window flags 只解决系统栏/刘海，消不掉截图里那种上下大黑边** —— 那来自 Cardboard 畸变 mesh 的 FOV 截断，由上面的 `screenFillMode` 解决 |
 | 真机 / 纸盒 / GFN 串流效果 | **真机反馈确认可用后又反馈失败，已第二轮修复**：`f77f482` 真机 logcat 定案「进 VR 啥也没有」是 `VrModeHost` 竞态，层级修复后用户确认「现在的确能使用了」。但随后 `7a9abfb` 版真机截图暴露：基础状态面板被 180° 反转、串流朝向不对、辅助线贴在 VR 面板里跟头转、状态栏仍显示。**这些画面效果已重新实现（见 §4 与 `HANDOFF.md` §13），全部待真机复测**。CI 只能证明「能编译 + 单测通过 + 能出 APK」，GLSL 运行时编译与视觉朝向 CI 抓不到 |
-| **上游源码基线** | **已合并官方 2.3.8**（`OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`，`versionCode=193`）：81 个文件三方合并，VR 全部功能完整保留，详见 §2.1 与 `HANDOFF.md` §24 |
+| **上游源码基线** | **已合并官方 2.3.8**（`OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`，`versionCode=193`）：81 个文件三方合并，VR 全部功能完整保留；合并后 CI run `42796583030` 两 job 全绿、`8 suites / 135 tests / 0 failures`，详见 §2.1、§5.1 与 `HANDOFF.md §24` |
 
 > 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端与 VR 内手柄设置面板、
 > 可导入的 360° 背景、瞳距调节、重置中心点、强制横向真全屏均已完成；串流朝向 / 基础 UI 正立 /
@@ -91,8 +91,10 @@
 上游 NVST/WebRTC 修复、`GfnServerInfo`、`PublishedBugs`、`MediaCodecDiagnostics`、
 `DoubleTapDirectClickGesture`、实验性「滑动 + 直接点击」等新功能。
 
-> ⚠️ 合并后必须重新跑 CI 编译与出 APK（上游 Kotlin 全量重编译），并重新真机确认 VR 入口、
-> 串流画面与透视窗口未受影响。`v0.7.0` 正式版仍是合并前、已真机验证的稳定基线。
+> ✅ 合并后的 CI 已重跑并通过：run `42796583030` 两个 job 全绿、
+> `8 suites / 135 tests / 0 failures`，APK 62078136 B（详见 §5.1 与 `HANDOFF.md §24.8`）。
+> ⚠️ 但**真机复测仍待做**：请重新确认 VR 入口、串流画面、透视窗口、菜单滚动与手柄输入。
+> `v0.7.0` 正式版仍是合并前、已真机验证的稳定基线，不会被合并版覆盖。
 
 ### 骨架刻意做成的「零影响」特性
 
@@ -486,6 +488,7 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
 | `42571202478` | `9401ef0` | **失败（非代码）** | 15 帧档推送：AAR job 已全绿，但 app job 下载 `gradle-9.7.1-bin.zip` 同样 10 秒超时；仍**未**编译 r6 的业务代码。两次失败促成 `e00287a` 的 CI 加固 |
 | **`42572527294`** | **`e00287a`** | **成功** | **r6 首次真正编译通过**。① CI 加固：两个 wrapper 改 `networkTimeout=120000` / `retries=5` / `retryBackOffMs=2000`，`vr-build.yml` 两个 job 各加「发行包预热」步骤；两次下载超时不再拖红整条流水线。② 首次完整验证 `38378f6` + `9401ef0` 的 r6 业务代码：摄像头方向 / 拉伸 / 不协调修复、分辨率 4 档、帧率 15/30/60 三档、旋转 / 镜像 / 钉在眼前、31 个设置项、34 行菜单、状态面板诊断全部 Kotlin 编译通过。③ 两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`7 suites / 125 tests / 0 failures / 0 errors / 0 skipped`，`BUILD SUCCESSFUL in 9m 11s`。产物 `opennow-vr-debug-arm64-v8a` 47603818 B、`cardboard-sdk-aar` 385622 B。**透视真机效果仍待复测**（见 §3.8） |
 | **`42590354856`** | **`ac584b7`** | **成功** | **r7 修复竖屏 9:16 / 拉伸 / 菜单溢出**。① 窗口比例与旋转解耦：AUTO=0、窗口恒横向 4:3/16:9、真实预览比例只决定居中 UV 裁切；`VrPassthroughGeometry.kt` 纯几何 + JVM 单测锁定。② Camera2 优先挑横向预览尺寸并归一化，杜绝竖屏缓冲尺寸。③ VR 菜单改为 `visibleWindowFor()` 可见 10 行窗口 + 右侧滚动条 + 计数，环境页 13 行现在能走到底。两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`。产物 `opennow-vr-debug-arm64-v8a` 61995484 B、`cardboard-sdk-aar` 388092 B。**真机效果待复测**（见 §3.8） |
+| **`42796583030`** | **`71b5dd5`** | **成功** | **上游 2.3.8 合并验证**（分支 `upstream-2.3.8`）：官方 `OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`（`versionCode=193` / `versionName="2.3.8"`）做 file-level 三方合并，81 个文件 = 57 直接采用 + 13 新增 + 11 三方合并（9 自动 / 2 人工），合并提交相对 `main` 为 **13 新增 + 71 修改**；采用 Gradle 9.8.2 但保留 CI 下载加固。两处人工冲突：`OpenNowStreamControls.kt` 以官方全文为准重新注入 `onEnterVr` 与「进入 VR」按钮、wrapper 保留 `networkTimeout=120000 / retries=5`。两 job 全绿：AAR 构建 + JNI 守卫、JVM 单测 + debug APK；`8 suites / 135 tests / 0 failures / 0 errors / 0 skipped`（与 r7 逐项一致）。产物 `opennow-vr-debug-arm64-v8a` **62078136 B**、`cardboard-sdk-aar` **388092 B**。**VR 26 个专属源码 / 单测文件在合并前后逐字节未变**（`git diff --stat main..upstream-2.3.8 -- .../vr/` 输出为空）。**合并版真机效果待复测**；`v0.7.0` 正式版仍是已验证基线（详见 §2.1 与 `HANDOFF.md §24`） |
 
 > **真机提示（已由用户实测确认）**：run `42189848032` 之前的 APK 点击「进入 VR」会因缺少
 > `libcardboard_sdk_jni.so` 闪退（`UnsatisfiedLinkError`），`42192555168` 之后已解决；
