@@ -108,7 +108,10 @@ jobs:
           if-no-files-found: error
 
   app:
-    name: vr-unit-tests-and-debug-apk
+    # Builds BOTH build types. The signed, R8-minified, non-debuggable release APK is the
+    # artifact published as an official (Stable) version; the debug APK stays as a diagnostic
+    # fallback. See docs/HANDOFF.md section 26.
+    name: vr-unit-tests-and-release-apk
     needs: cardboard-aar
     runs-on: ubuntu-24.04
     defaults:
@@ -181,7 +184,7 @@ jobs:
           echo "FAIL: Gradle distribution could not be downloaded after 5 attempts" >&2
           exit 1
 
-      - name: Run VR JVM unit tests and build the debug APK
+      - name: Run VR JVM unit tests and build the debug + signed release APKs
         shell: bash
         run: |
           set -euo pipefail
@@ -189,6 +192,9 @@ jobs:
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           export CMAKE="$SDK/cmake/3.31.6/bin/cmake"
           export CMAKE_POLICY_VERSION_MINIMUM=3.5
+          # assembleRelease is the OFFICIAL build: signed with signingConfigs.release, R8 minify +
+          # resource shrink, android:debuggable=false. proguard-rules.pro keeps the Cardboard JNI
+          # surface and the VR enums that VrSettingsStore persists by name.
           # Scope the JVM tests to the VR package on purpose. The upstream project ships 167
           # other test classes that reference android.* framework types with neither Robolectric
           # nor unitTests.returnDefaultValues configured, and upstream CI never ran them. Running
@@ -196,6 +202,7 @@ jobs:
           ./gradlew --no-daemon --no-configuration-cache \
             -Popennow.abis="$OPENNOW_ABIS" \
             :app:assembleDebug \
+            :app:assembleRelease \
             :app:testDebugUnitTest --tests "com.opencloudgaming.opennow.vr.*"
 
       # Guard against "CI is green but zero tests ran". Gradle writes one TEST-*.xml per
@@ -230,17 +237,52 @@ jobs:
               sys.exit('FAIL: VR JVM tests reported failures/errors')
           PY
 
-      - name: Collect the APK
+      - name: Collect the debug and release APKs
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p ../out
-          find app/build/outputs/apk -name '*.apk' -exec cp -v {} ../out/app-arm64-v8a-debug.apk \;
+          # -print -quit avoids a `find | head` SIGPIPE under `set -o pipefail`.
+          DEBUG_APK="$(find app/build/outputs/apk/debug -name '*.apk' -type f -print -quit)"
+          RELEASE_APK="$(find app/build/outputs/apk/release -name '*.apk' -type f ! -name '*unsigned*' -print -quit)"
+          test -n "$DEBUG_APK" || { echo 'FAIL: no debug APK produced' >&2; exit 1; }
+          test -n "$RELEASE_APK" || {
+            echo 'FAIL: no SIGNED release APK produced (check signingConfigs.release)' >&2
+            echo 'Release outputs:' >&2
+            find app/build/outputs/apk/release -maxdepth 1 -type f -printf '%f\n' >&2 || true
+            exit 1
+          }
+          cp -v "$DEBUG_APK" ../out/app-arm64-v8a-debug.apk
+          cp -v "$RELEASE_APK" ../out/app-arm64-v8a-release.apk
           ls -la ../out
 
-      # Same regression guard at the very end: verify the shipped APK really carries the JNI
-      # bridge, not just the intermediate AAR. This is the artifact the user sideloads.
-      - name: Verify the Cardboard JNI bridge is in the APK
+      # A green assembleRelease is not enough: an unsigned APK is un-installable, and an
+      # accidentally-still-debuggable one is not an official build. Fail the job on either.
+      - name: Verify the release APK is signed and not debuggable
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          APKSIGNER="$(find "$SDK/build-tools" -name apksigner -type f | sort | tail -1)"
+          echo "apksigner: $APKSIGNER"
+          test -n "$APKSIGNER" || { echo 'FAIL: apksigner not found' >&2; exit 1; }
+          "$APKSIGNER" verify --verbose --print-certs ../out/app-arm64-v8a-release.apk
+          AAPT="$(find "$SDK/build-tools" -name aapt -type f | sort | tail -1 || true)"
+          if [ -n "$AAPT" ]; then
+            BADGING="$("$AAPT" dump badging ../out/app-arm64-v8a-release.apk)"
+            echo "$BADGING" | grep -E '^package:'
+            if echo "$BADGING" | grep -q 'application-debuggable'; then
+              echo 'FAIL: release APK is still debuggable' >&2
+              exit 1
+            fi
+            echo 'release APK is NOT debuggable'
+          else
+            echo 'aapt unavailable in this build-tools; skipping the debuggable flag check'
+          fi
+
+      # Same regression guard at the very end: verify BOTH shipped APKs really carry the JNI
+      # bridge, not just the intermediate AAR. The release APK is the one users sideload.
+      - name: Verify the Cardboard JNI bridge is in both APKs
         shell: bash
         run: |
           set -euo pipefail
@@ -260,11 +302,18 @@ jobs:
                   sys.exit('FAIL: lib/arm64-v8a/libGfxPluginCardboard.so missing from APK')
           PY
 
-      - name: Upload the APK
+      - name: Upload the official release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: opennow-vr-release-arm64-v8a
+          path: out/app-arm64-v8a-release.apk
+          if-no-files-found: error
+
+      - name: Upload the debug APK (diagnostic fallback only)
         uses: actions/upload-artifact@v4
         with:
           name: opennow-vr-debug-arm64-v8a
-          path: out/*.apk
+          path: out/app-arm64-v8a-debug.apk
           if-no-files-found: error
 
       - name: Upload the unit test report

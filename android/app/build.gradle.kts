@@ -66,9 +66,22 @@ android {
     // on a fresh CI runner is a brand-new key every run — so every CI APK had a different signature
     // and `adb install -r` failed with INSTALL_FAILED_UPDATE_INCOMPATIBLE, forcing an uninstall that
     // wipes the saved login. One shared debug key makes sideloaded updates replace in place.
+    //
+    // assembleRelease produces an UNSIGNED APK unless a signingConfig is attached. release.keystore
+    // is a byte-for-byte copy of debug.keystore, i.e. the SAME signing identity: users who sideloaded
+    // an earlier debug build can install the official release straight over it without uninstalling
+    // and losing their saved login. The separate filename only makes the release config explicit —
+    // "release" vs "debug" is the BUILD TYPE (non-debuggable, R8 minify + resource shrink, release
+    // BuildConfig flags), not a different key. See docs/HANDOFF.md section 26.
     signingConfigs {
         getByName("debug") {
             storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        create("release") {
+            storeFile = rootProject.file("keystore/release.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
@@ -82,6 +95,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             buildConfigField("boolean", "APK_UPDATES_SUPPORTED", (!buildingPlayReleaseBundle).toString())
             buildConfigField("boolean", "PLAY_STORE_RELEASE", buildingPlayReleaseBundle.toString())
             buildConfigField("boolean", "LOCAL_APP_LAUNCHER_SUPPORTED", (!buildingPlayReleaseBundle).toString())
