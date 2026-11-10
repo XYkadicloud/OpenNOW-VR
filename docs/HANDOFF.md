@@ -187,7 +187,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | 项目 | 说明 |
 | --- | --- |
 | ~~P3：VR 内部、戴头显时用手柄操作的设置面板~~ | **已于 `9fb1d16` 之后完成并持续扩充**：VR 内菜单现 21 行（含瞳距、重置中心点、扫码、恢复默认、退出 VR），由 `VrGamepadRouter` 手柄驱动，长按 `START+SELECT` / `HOME/MODE` 打开。见 3.1 与 §14 |
-| **串流开始后才进入 VR（中途切换）** | **受解码器架构限制，未实现无缝**，详见 **8.5**。已核实：先进 VR 再开始串流可用；串流中才进 VR 时，解码器仍是纯 texture 路径，VR 的 `SurfaceTexture` 收不到画面 |
+| ~~**串流开始后才进入 VR（中途切换）**~~ | **已解除**：2026-11-10 用户真机确认「串流中途切 VR 现在是能用的了」。下面 §8.5 中基于静态源码阅读得出的「受解码器架构限制、不可无缝」结论**已被实测证伪**，本轮未做源码级归因、也未改动上游解码器；保留原文仅作历史记录，**不要再按「不可用」回答用户** |
 | 完整 2D UI 镜像进 VR | 见 2.2，用户「可以试一下」的可选项，未实现 |
 | ~~上游 2.3.8 适配~~ | **已于 2026-11-10 完成**：官方 `OpenNOW/android-native` 2.3.8 源码三方合并，见 **§24**。此前「阻塞」结论已更正 |
 | 汉化 | 用户说「我其实只需要汉化就行」，语义未确认，**未执行**。不要擅自全量改文案 |
@@ -438,7 +438,11 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
      **VR 能收到画面，且进/出 VR 都能在同一会话内切换 target**。这条路径可用。
    - **先开始串流（VR 未开），串流中途才进 VR** → decoder 已是纯 `textureDecoder`，
      `VrVideoSurfaceRegistry.target()` 虽然返回 VR 的 SurfaceTexture，**没有任何解码器消费它**，
-     VR 里只剩 2D 状态面板。**这条路径目前不可用**。
+     VR 里只剩 2D 状态面板。~~**这条路径目前不可用**~~
+     **⚠️ 2026-11-10 更正：用户真机确认「串流中途切 VR 现在是能用的了」，本条静态推断已被实测证伪。**
+     可能是官方上游 2.3.8 合并后的解码器选择逻辑、`directSdrEnabled()` 的实际取值或
+     `VrVideoSurfaceRegistry.isActive` 的时序与上面的静态推断不同；本轮**没有**做源码级归因，
+     也**没有**改动上游解码器。以下「正确修复方案」保留为历史方案，不再是待办。
 3. **为什么本轮没有硬改解码器**：`directSdrEnabled` 恒 true 会绕过 `prefersDirectSdr` 的
    `!hdr && !textureRequired` 保护，破坏 HDR、锐化、录制等上游功能；而
    `SurfaceOrTextureVideoDecoder` 的 `switchToTexture()` 是「一次失败就永久回退」的设计。
@@ -645,7 +649,7 @@ adb logcat -s VrSession,VrModeHost,VrTheaterView,VrTheaterRenderer
 | `VrTheaterRenderer.kt` | `PANEL_FLIP_Y` 回退 `0.0f`；新增 `videoTexCoordBuffer`，`horizontalMirror` 用 `u→1-u`、`verticalFlip` 用 `v→1-v`，**只给视频 quad**，panel/menu/360° 球体继续用原 `texCoordBuffer`；视频路径不再 mutate `stMatrix` |
 | `VrTheaterRenderer.kt` | 删除 panel Canvas 里的辅助线；新增 `linePositionBuffer` / `lineTexCoordBuffer` / `lineTextureId` / `createLineResources()` / `drawScreenSpaceAlignmentLine()` |
 | `VrTheaterRenderer.kt` | 菜单 18→19 行（`MENU_ROWS_PER_COLUMN=10`、`MENU_ROW_HEIGHT=30f`）；`onRendererShutdown` 释放线纹理；`createLineResources()` 幂等（surface 重建先删旧纹理） |
-| `VrSettings.kt` | 新增 `verticalFlip`；`sanitized()` 保留；三个朝向/辅助线开关默认全关 |
+| `VrSettings.kt` | 新增 `verticalFlip`；`sanitized()` 保留；当时三个朝向/辅助线开关默认全关。**⚠️ `verticalFlip` 默认值已于 2026-11-10 改为 `true`**（串流 OES 纹理天然 V 轴倒置，真机反馈新装画面上下颠倒），见 **§25** |
 | `VrSettingsStore.kt` | 补 `K_ALIGN_LINE` / `K_H_MIRROR` / `K_V_FLIP` 的 load / save |
 | `VrSettingsSection.kt` | 新增「串流画面上下翻转」开关，更新镜像/辅助线说明 |
 | `VrMenuModel.kt` | 新增 `VERTICAL_FLIP` 枚举项，rawValue / display / activate / toggle 全部补齐 |
@@ -678,7 +682,8 @@ Cardboard SDK 的 `onRenderStereoFrame()` 把左右眼分别画到 FBO 的两个
   两项叠加是否等于 180° 旋转、辅助线是否固定在屏幕正中且不跟头转、强制横向与状态栏/导航栏
   是否隐藏、退出 VR 后方向与系统栏是否恢复。
 - 若串流朝向仍相反，在 2D 设置页或 VR 菜单里切换「串流左右镜像 / 串流上下翻转」即可确认方向，
-  两个开关独立、可叠加、默认都关、随时可恢复。
+  两个开关独立、可叠加、随时可恢复。**⚠️ 2026-11-10 更正**：真机确认串流纹理天然上下颠倒，
+  「上下翻转」默认已改为 **开**（新装 / 恢复默认就是正立画面），「左右镜像」仍默认关；见 **§25**。
 - 未实现：把整个手机 2D 界面放进 VR 场景（见 §2.2 可选项）。
   **瞳距 / IPD 调整已于后续提交实现**，见 §14。
 
@@ -1885,11 +1890,14 @@ Column(Modifier.fillMaxSize().verticalScroll(scrollState) ...)
 
 - 手机摄像头是单目 2D 画面，套 `eyeFromHead + perspective` 产生的是**近似**双眼视差，
   不是真实深度；「不协调感」无法 100% 消除，只能靠「跟随幕布 + 缩小深度差」压到最低。
-- 若某机型 `StreamConfigurationMap` 只提供竖屏预览条目，`normaliseLandscape()` 只保证
+- ~~若某机型 `StreamConfigurationMap` 只提供竖屏预览条目，`normaliseLandscape()` 只保证
   **上报值**是横向；Camera2 producer 仍可能按竖屏尺寸输出，`getTransformMatrix()` 于是携带
-  缩放。当前优先挑横向条目，绝大多数设备不会走到这条分支；真机如遇变形可优先切 16:9 档。
+  缩放。当前优先挑横向条目，绝大多数设备不会走到这条分支；真机如遇变形可优先切 16:9 档。~~
+  **✅ 2026-11-10 已消除该隐患**：`normaliseLandscape()` 删除，真实 W/H 原样上报且 `VrPassthroughGeometry`
+  接受竖屏 buffer、窗口恒横向（见 **§25.4**）。这正是第三轮真机「翻转后仍拉伸」的两个根因之一。
 - 手动 `90 / 270` 覆盖会把横向 buffer 的有效内容变成竖屏比例，为填满横向窗口会裁掉较多
   上下内容（数学上正确但视野变窄）。这是「保持像素比例」的必然代价，不是 bug。
+  **2026-11-10 补充**：裁切轴现在会随 90/270 交换，所以裁掉的比例是准确的、画面不再被拉宽。
 - 竖屏 9:16 与菜单溢出都属**视觉 / 交互**问题，JVM 单测只能锁几何与滚动规则，
   最终仍以真机截图为准。
 - **源码注释滞后（纯措辞，不影响行为，下一轮顺手订正）**：
@@ -2037,7 +2045,7 @@ CI 的 Gradle 下载加固与预热步骤。
 | v0.7.0 转正式版 | **已完成**：`prerelease=false`，3 个资源 `state=uploaded`，用户真机复测通过 |
 | 三方合并 + 完整性校验 | **已完成**（见 24.5） |
 | **CI 全量编译 + JVM 单测 + 出 APK** | **已通过**：run `42796583030`，两个 job 全绿、`8 suites / 135 tests / 0 failures`，详见 §24.8 |
-| **真机复测合并后的 VR** | **待办**：上游 Kotlin 全量重编译后，VR 入口、串流画面、透视窗口、菜单滚动、手柄输入都需重新确认 |
+| **真机复测合并后的 VR** | **已完成（2026-11-10，用户）**：串流中途切 VR、菜单滚动、菜单关闭后焦点回游戏、系统返回键退出、相机权限、手柄长按组合键、串流画面与状态面板正立全部确认可用。另发现两个视觉缺陷（串流默认上下颠倒、透视拨正后仍拉伸），已在 **§25** 修复，修复效果待下一轮真机复测 |
 | 再往后的上游版本 | **仍无可合并源码**，维持现状 |
 
 ### 24.8 CI 验证结论（已通过）
@@ -2068,8 +2076,10 @@ CI 的 Gradle 下载加固与预热步骤。
 - 本机无 Android SDK / JDK 17（只有 Java 8），以上结论**全部来自 GitHub Actions**，
   不是本地编译；CI 也**不能**证明 GLSL shader 运行时编译、真机画面与手柄手感。
 
-> CI 只证明「可编译 + JVM 单测通过 + 能出 APK」。合并版仍需真机复测（见 §24.7），
+> CI 只证明「可编译 + JVM 单测通过 + 能出 APK」。当时合并版仍需真机复测（见 §24.7），
 > 因此 `v0.7.0` 正式版保持不动，合并版单独以 Pre-release 交付，不冒充稳定版。
+> **⚠️ 2026-11-10 后续更正**：真机复测已完成且大部分功能确认可用；另发现两个视觉缺陷并已在 **§25**
+> 修复，因此 `v0.8.0` **没有被**转成正式版，修复后的版本另行发布。
 
 > **回退路径**：`v0.7.0` 的 tag / Release / APK / r7 导出包均在，
 > 若合并版本真机不可用，可直接回退到 `0e387d0`（`v0.7.0`）这个已验证基线。
@@ -2089,6 +2099,95 @@ CI 的 Gradle 下载加固与预热步骤。
   `OnScreenControlsSettingsInstrumentedTest.kt` 采用上游 mouse mode 用例并保留
   `onEnterVr = { }`。包内新增 `05_上游2.3.8合并说明.md`（来源核实、三方合并策略、
   两处冲突、完整性校验、采用 / 保留清单、回退）。
-- **下一步只剩真机复测**：合并版复测通过后，才考虑把 `v0.8.0` 转正式版或发更高版本；
-  复测不通过就按回退路径回到 `v0.7.0`。
+- ~~**下一步只剩真机复测**：合并版复测通过后，才考虑把 `v0.8.0` 转正式版或发更高版本~~
+  **⚠️ 已被 §25 取代**：真机复测已完成，大部分功能确认可用，但暴露两个视觉缺陷；
+  没有把 `v0.8.0` 转正式版，而是先修复再另行发布正式版。`v0.7.0` 回退基线仍保留。
 
+---
+
+## 25. 2026-11-10 真机复测结论与两个视觉缺陷修复（v0.9.0）
+
+### 25.1 用户诉求与本轮反馈原话
+
+用户问「目前你弄的也都能使用，你可以发布正式版了吧？」，同时给出合并上游 2.3.8 后的真机结论：
+
+- 「**串流中途切 VR 现在是能用的了**」—— 推翻了 §8.5 / 旧 README §6 第 9 条的静态推断。
+- 「其他的其实也都还行」、菜单能这样使用、焦点能回游戏、返回键退出、相机权限等基本都能使用。
+- 两个残留视觉问题：**串流窗口画面朝向默认反了**（每次都要手动开「上下翻转」）、
+  **透视窗口仍然拉伸**；追问后补充「**笔记本屏幕的确是比较宽扁的，然后呢，我是已经开了摄像头的翻转，
+  所以说呢才是正常的方向，但比例有拉伸，不知道为什么**」。
+
+判断：**不修这两个已知缺陷就转正式版，等于把缺陷钉死在稳定版里**，因此先修再发布。
+真机截图两张（串流面板正立 / 透视窗口已是横向但仍失真）已核对。
+
+### 25.2 真机确认可用清单（旧结论作废）
+
+| 项目 | 结论 |
+| --- | --- |
+| 串流开始后中途切 VR | **可用**（旧「暂不可用」结论作废，§8.5 已加更正） |
+| 二级菜单 / 10 行滚动窗口 / LB/RB 换页 | 可用，`visibleWindowFor()` 与滚动条生效 |
+| 菜单关闭后输入焦点回游戏 | 可用，`restoreVrGameInput()` 的 open→close 边缘触发生效 |
+| 系统返回键退出 / 控制器 BACK 直通游戏 / 相机权限 | 可用 |
+| 串流画面、纯黑底、状态面板文字方向 | 面板文字正立、双目正常 |
+
+### 25.3 缺陷一：串流画面默认上下颠倒
+
+- **成因**：`MediaCodec → SurfaceTexture → GL_TEXTURE_EXTERNAL_OES` 的 texel V 轴相对
+  `VrScreenGeometry` 生成的 quad UV 天然倒置；`VrSettings.DEFAULT.verticalFlip = false`
+  意味着每个新安装 / 「恢复默认」/ 清空 SharedPreferences 之后看到的都是倒立画面。
+- **修复**：`verticalFlip` 默认值改为 **`true`**，字段、开关、持久化、`sanitized()` 全部保留，
+  用户随时可关回查看原始采样。实现仍是 `VrTheaterRenderer.rebuildStreamQuad()` 里
+  `videoTexCoordBuffer` 的 CPU 端 `v → 1-v`；**没有改任何 GLSL / `uSTMatrix` / SDK 参数**。
+- **同步**：`VrSettingsTest`、`VrMenuModelTest`（改用显式 OFF 基准做可逆性断言）、
+  `VrSettingsSection` 开关说明与页脚长文案、`README-VR.md` 设置表与「朝向不对怎么办」、
+  §13.3 / §13.5 的历史默认值描述。
+
+### 25.4 缺陷二：透视拨正后仍拉伸（核心几何 bug）
+
+数学推导（归一化：buffer 高 = 1，宽 = `p = previewAspect`）：
+
+- 设窗口比例 `A_win`（4/3 或 16/9，恒 > 1）。`centreCrop()` 返回内容空间的
+  `(cropX, cropY)`，使 `cropX * A_content / cropY = A_win`。
+- 渲染器先把 quad UV 旋转，再在**旋转后的 raw-buffer UV** 上套 `cropUv()`。
+  0° / 180° 时 buffer u ↔ 窗口横轴、v ↔ 纵轴，可直接使用；
+  **90° / 270° 时两轴转置**（buffer u ↔ 窗口纵轴、v ↔ 横轴），必须交换保留比例。
+- 旧代码直接把 `(cropX, cropY)` 当 `(keepU, keepV)` 用。以 `p = 16/9`、窗口 16/9、旋转 90° 为例：
+  `A_content = 9/16`，`crop = (1, 0.3164)`，未交换时
+  `sampledAspect = 0.3164 / (1 × 16/9) ≈ 0.178`，而窗口是 `1.778` —— 画面被极端拉宽。
+  正确做法交换为 `(0.3164, 1)`，得 `1 / (0.3164 × 16/9) = 1.778 = A_win`。
+- 第二个成因：`VrPassthroughCamera.normaliseLandscape()` 把厂商上报的竖屏条目
+  （如 720×1280）改写成假的 1280×720，同时传给 `setDefaultBufferSize()` 与 `onPreviewConfig()`；
+  在仍真实产出竖屏 buffer 的机型上，相机与渲染器对「哪条轴更宽」认知不一致，同样会拉伸。
+
+**修复**：
+
+| 文件 | 改动 |
+| --- | --- |
+| `VrPassthroughGeometry.kt` | `previewAspect()` 改为**原样** W/H（可为 < 1，不再长边/短边归一化）；新增 `bufferCrop(contentAspect, windowAspect, rotationDeg)`（90/270 交换轴）与 `sampledAspect(previewAspect, rotationDeg, keepU, keepV)` 不变量函数；`centreCrop()` / `cropUv()` 保持不变 |
+| `VrTheaterRenderer.kt` | `rebuildPassthroughQuad()` 改用 `bufferCrop()` 得到 `keepU/keepV` 再喂 `cropUv()`；新增 `ptKeepU/ptKeepV` 供状态面板诊断；`onRendererShutdown()` 把残留的 `ptAutoRotationDeg = 90` 更正为 `0` 并重置 crop |
+| `VrPassthroughCamera.kt` | 删除 `normaliseLandscape()`，`choosePreviewSize()` 返回并上报**真实**尺寸（仍优先挑横向条目）；`setDefaultBufferSize()` 与 `onPreviewConfig()` 现在口径一致且不再造假；KDoc 补两轮真机修复说明 |
+| `VrTheaterRenderer.drawStatus()` | 透视第二行改为打印 `采样 U/V`、`比例 x.xx（应 x.xx）`；两个数一致即真机证明没拉伸 |
+| `VrSettings.kt` / `VrSettingsSection.kt` | 窗口比例、分辨率、旋转三处 KDoc / 说明同步为「原样上报 + 任一角度按窗口比例裁切」 |
+
+### 25.5 JVM 单测不变量
+
+`VrPassthroughGeometryTest.kt` 由 6 个用例扩到 10 个，新增：
+
+- `everyRotationSamplesAWindowShapedRegion()`：`{640×480, 1280×720, 1920×1080, 720×1280, 480×640}`
+  × `{4:3, 16:9}` × `{0, 90, 180, 270}` = **40 组组合**，逐组断言
+  `sampledAspect(...) == windowAspect(...)`，且 `keepU/keepV ∈ (0,1]`。
+- `bufferCropSwapsAxesOnlyForQuarterTurns()`：0/180 原样、90/270 交换。
+- `aManual90DegreeRotation...()` 增加「旧未交换裁切确实明显错误」的回归证明（不是 no-op 修复）。
+- `aPortraitBufferCanStillFillALandscapeWindowWithoutStretching()`：竖屏 buffer + 90° 仍得到横向窗口且比例精确。
+- `previewAspectUsesTheRealBufferAxesIncludingPortrait()`：锁定 720×1280 → 9/16 与极端值钳制。
+
+### 25.6 行为约束复核
+
+- **不改 shader**：串流与透视都只改 CPU 端 UV buffer / 纯 Kotlin 几何；`VIDEO_FRAGMENT_SHADER` 未动。
+- **全部可调**：`verticalFlip`、`passthroughRotation`、`passthroughMirror`、`passthroughAspect` 等开关原样保留。
+- **无性能妥协**：新增全是一次 quad 重建时的标量运算与一个状态面板 `String.format`，渲染循环零新增分配。
+- **CI 只能证明**：可编译、纯 JVM 几何不变量、能出 APK；真机画面效果仍需用户复测。
+
+### 25.7 CI 与正式版交付
+
+> 本节在本轮代码推送 / CI / Release 完成后补录（run ID、测试数、产物大小、Release ID、r9 导出包）。

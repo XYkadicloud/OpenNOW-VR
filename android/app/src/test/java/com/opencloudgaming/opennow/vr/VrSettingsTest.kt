@@ -68,19 +68,23 @@ class VrSettingsTest {
     }
 
     @Test
-    fun streamOrientationAndOverlayFlagsDefaultOffAndSurviveSanitize() {
+    fun streamOrientationAndOverlayFlagsDefaultsAndSurviveSanitize() {
         val defaults = VrSettings.DEFAULT
         assertEquals(false, defaults.horizontalMirror)
-        assertEquals(false, defaults.verticalFlip)
+        // v0.8.0 real-device feedback: a fresh install showed an UPSIDE-DOWN stream until the
+        // user manually enabled this switch. The OES texture is V-inverted, so the default is ON.
+        assertEquals(true, defaults.verticalFlip)
         assertEquals(false, defaults.showCenterAlignmentLine)
         val toggled = VrSettings(
             horizontalMirror = true,
-            verticalFlip = true,
+            verticalFlip = false,
             showCenterAlignmentLine = true,
         ).sanitized()
         assertEquals(true, toggled.horizontalMirror)
-        assertEquals(true, toggled.verticalFlip)
+        assertEquals("turning the flip OFF must survive sanitize()", false, toggled.verticalFlip)
         assertEquals(true, toggled.showCenterAlignmentLine)
+        val allOn = VrSettings(horizontalMirror = true, verticalFlip = true).sanitized()
+        assertEquals(true, allOn.verticalFlip)
     }
 
     @Test

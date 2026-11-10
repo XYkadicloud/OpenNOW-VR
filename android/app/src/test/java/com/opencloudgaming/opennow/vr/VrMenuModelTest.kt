@@ -84,16 +84,20 @@ class VrMenuModelTest {
     @Test
     fun newToggleRowsFlipAndAreReversible() {
         val s = VrSettings.DEFAULT
+        // verticalFlip defaults to ON (upside-down OES stream fix), so exercise its toggle from
+        // an explicit OFF baseline; the other toggles still default to OFF.
+        val off = s.copy(verticalFlip = false)
+        assertEquals(true, VrSettings.DEFAULT.verticalFlip)
         assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.HORIZONTAL_MIRROR, 1).horizontalMirror)
         assertEquals(
             false,
             VrMenuModel.adjust(s.copy(horizontalMirror = true), VrMenuItemId.HORIZONTAL_MIRROR, 1)
                 .horizontalMirror,
         )
-        assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip)
+        assertEquals(true, VrMenuModel.adjust(off, VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip)
         assertEquals(
             false,
-            VrMenuModel.adjust(s.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip,
+            VrMenuModel.adjust(off.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP, 1).verticalFlip,
         )
         assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.CENTER_ALIGN_LINE, 1).showCenterAlignmentLine)
         assertEquals(true, VrMenuModel.adjust(s, VrMenuItemId.BACKGROUND, 1).backgroundEnabled)
@@ -199,16 +203,17 @@ class VrMenuModelTest {
     @Test
     fun newToggleRowsAreReversible() {
         val s = VrSettings.DEFAULT
+        val off = s.copy(verticalFlip = false)
         assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.HORIZONTAL_MIRROR).horizontalMirror)
         assertEquals(
             false,
             VrMenuModel.activate(s.copy(horizontalMirror = true), VrMenuItemId.HORIZONTAL_MIRROR)
                 .horizontalMirror,
         )
-        assertEquals(true, VrMenuModel.activate(s, VrMenuItemId.VERTICAL_FLIP).verticalFlip)
+        assertEquals(true, VrMenuModel.activate(off, VrMenuItemId.VERTICAL_FLIP).verticalFlip)
         assertEquals(
             false,
-            VrMenuModel.activate(s.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP)
+            VrMenuModel.activate(off.copy(verticalFlip = true), VrMenuItemId.VERTICAL_FLIP)
                 .verticalFlip,
         )
     }

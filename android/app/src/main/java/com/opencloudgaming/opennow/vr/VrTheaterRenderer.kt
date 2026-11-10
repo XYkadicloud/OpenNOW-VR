@@ -253,6 +253,10 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
     @Volatile private var ptPreviewW = 0
     @Volatile private var ptPreviewH = 0
     @Volatile private var ptPreviewFps = 0
+    /** Raw-buffer crop actually baked into ptTexCoordBuffer, shown in the status board so a
+     *  stretched picture can be diagnosed on the device without adb. GL thread only. */
+    private var ptKeepU = 1f
+    private var ptKeepV = 1f
     /** Bumped by applySettings() and by the camera's config callback (GL thread consumes). */
     @Volatile private var ptConfigDirty = true
     private val ptPositionBuffer: FloatBuffer = newFloatBuffer(12)
@@ -901,11 +905,15 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         ptCamera = null
         releasePassthroughTexture()
         ptUnavailable.set(false)
-        ptAutoRotationDeg = 90
+        // AUTO must always mean 0° (upright landscape preview); a stale 90 here was the old
+        // sensor-orientation baseline and would rotate the picture again after a GL context loss.
+        ptAutoRotationDeg = 0
         ptAutoMirror = false
         ptPreviewW = 0
         ptPreviewH = 0
         ptPreviewFps = 0
+        ptKeepU = 1f
+        ptKeepV = 1f
         ptAppliedGameAspect = 0f
         VrMatrix4.identityInto(gameModelMatrix)
         ptConfigDirty = true
@@ -1238,20 +1246,31 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
      * VrScreenGeometry's stream quad. The camera quad lives slightly further away (z = -d2), so
      * BOTH its size and its centre offset are multiplied by d2/d1 to preserve ANGULAR size. Nothing
      * is stretched: the camera window is a FIXED LANDSCAPE 4:3 / 16:9 rect chosen by the user, and
-     * the real Camera2 preview ratio only decides how much of the buffer is centre-cropped into it.
-     * The old "take the reciprocal for a 90° turn" rule is what produced the portrait 9:16 window.
+     * the REAL Camera2 preview ratio (portrait included) only decides how much of the buffer is
+     * centre-cropped into it. The old "take the reciprocal for a 90° turn" rule produced the
+     * portrait 9:16 window; the second bug was applying the content-space crop to the rotated
+     * raw-buffer UVs without swapping axes, which stretched an otherwise upright picture.
+     * VrPassthroughGeometry.bufferCrop()/sampledAspect() encode and lock the corrected invariant.
      */
     private fun rebuildPassthroughQuad(s: VrSettings) {
         val effectiveRotation = effectivePassthroughRotation(s)
         val fourThree = s.passthroughAspect == VrPassthroughAspect.FOUR_THREE
         val windowFallback = VrPassthroughGeometry.windowAspect(fourThree)
-        // REAL preview dimensions reported by Camera2, normalised to landscape. Used ONLY to work
-        // out how much of the buffer to sample — the WINDOW shape never follows the buffer.
+        // REAL preview dimensions reported by Camera2, VERBATIM (a portrait buffer stays portrait).
+        // Used ONLY to work out how much of the buffer to sample — the WINDOW shape never follows it.
         val previewAspect = VrPassthroughGeometry.previewAspect(ptPreviewW, ptPreviewH, windowFallback)
         // ALWAYS landscape. Never derive the quad ratio from the rotation (see KDoc above).
         val cameraAspect = windowFallback
         val contentAspect = VrPassthroughGeometry.contentAspect(previewAspect, effectiveRotation)
-        val (cropU, cropV) = VrPassthroughGeometry.centreCrop(contentAspect, cameraAspect)
+        // centreCrop() works in UPRIGHT CONTENT axes, but the UV rotation below transposes those
+        // axes for a quarter turn. bufferCrop() maps the crop onto the RAW BUFFER UV axes we
+        // actually sample — without it a 90/270 picture is stretched even though the window is
+        // correctly landscape (the 2026-11-10 real-device report).
+        val (keepU, keepV) = VrPassthroughGeometry.bufferCrop(
+            contentAspect, cameraAspect, effectiveRotation,
+        )
+        ptKeepU = keepU
+        ptKeepV = keepV
         val gameAspect = VrSession.videoAspect.coerceIn(0.25f, 8f)
         ptAppliedGameAspect = gameAspect
         val d1 = s.screenDistanceMeters.coerceAtLeast(0.1f)
@@ -1341,9 +1360,11 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
             // Front lenses are mirrored by default; the user's extra mirror XORs with that.
             if (ptAutoMirror != s.passthroughMirror) su = 1f - su
             // Keep every pixel's REAL aspect: centre-crop the excess instead of squeezing the
-            // quad. With AUTO (0°) and a matching tier this is a no-op on both axes.
-            su = VrPassthroughGeometry.cropUv(su, cropU)
-            sv = VrPassthroughGeometry.cropUv(sv, cropV)
+            // quad. keepU/keepV are already expressed in these POST-ROTATION buffer UV axes
+            // (swapped for 90/270), so the sampled region always has the window's ratio.
+            // With AUTO (0°) and a matching tier this is a no-op on both axes.
+            su = VrPassthroughGeometry.cropUv(su, keepU)
+            sv = VrPassthroughGeometry.cropUv(sv, keepV)
             ptTexCoordBuffer.put(su)
             ptTexCoordBuffer.put(sv)
             i += 2
@@ -1464,10 +1485,22 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
                 ),
                 44f, 348f, hint,
             )
+            // The sampled ratio MUST equal the window ratio (4:3 = 1.33 / 16:9 = 1.78) at EVERY
+            // rotation. Printing it lets the user prove on-device that a manual 90/270 turn no
+            // longer stretches the picture, without adb or a screenshot analysis.
+            val windowAspect = VrPassthroughGeometry.windowAspect(
+                s.passthroughAspect == VrPassthroughAspect.FOUR_THREE,
+            )
+            val rawAspect = VrPassthroughGeometry.previewAspect(ptPreviewW, ptPreviewH, windowAspect)
+            val sampled = VrPassthroughGeometry.sampledAspect(rawAspect, rot, ptKeepU, ptKeepV)
             canvas.drawText(
-                (if (s.passthroughHeadLocked) "窗口：钉在眼前（与幕布会相对滑动）"
-                 else "窗口：跟随幕布（默认·无相对滑动）") + " · " +
-                    (if (ptHasFrame.get()) "画面正常" else "等待相机帧（黑底降级）"),
+                String.format(
+                    Locale.US,
+                    "窗口：%s · 采样 %.2f/%.2f · 比例 %.2f（应 %.2f）· %s",
+                    if (s.passthroughHeadLocked) "钉在眼前" else "跟随幕布",
+                    ptKeepU, ptKeepV, sampled, windowAspect,
+                    if (ptHasFrame.get()) "画面正常" else "等待相机帧",
+                ),
                 44f, 370f, hint,
             )
         }
@@ -1671,6 +1704,8 @@ class VrTheaterRenderer(private val context: Context) : CardboardView.Renderer {
         // FINAL sampled coordinate (including any crop/translation carried by uSTMatrix). That is
         // exactly what the old stMatrix[0] negation failed to do. The status panel, the menu and
         // the 360° sphere keep sampling texCoordBuffer and are therefore never flipped.
+        // verticalFlip defaults to TRUE because this OES path is inherently V-inverted; users can
+        // still turn it off in the 2D settings or the in-VR menu to see the raw sampling.
         videoTexCoordBuffer.clear()
         var t = 0
         while (t < mesh.texCoords.size) {

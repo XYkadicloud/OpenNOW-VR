@@ -52,6 +52,16 @@ import kotlin.math.abs
  *    CONTROL_AE_TARGET_FPS_RANGE from CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES; a 30 fps-only phone
  *    silently falls back to 30 and the effective value is reported back for the status panel.
  *
+ * 2026-11-10 real-device fix ("已经开了摄像头的翻转...但比例有拉伸"):
+ *  - centreCrop() returns keep-fractions in UPRIGHT CONTENT axes, but the renderer applies them
+ *    AFTER rotating the UVs into raw-buffer axes. A 90/270 turn TRANSPOSES those axes, so the
+ *    fractions must be swapped (VrPassthroughGeometry.bufferCrop()). Without that, a manually
+ *    upright picture is still stretched even though the window itself is correctly landscape.
+ *  - normaliseLandscape() was removed: rewriting an advertised 720x1280 buffer as "1280x720"
+ *    made the camera and renderer disagree about which axis was wide. The real W/H is now
+ *    reported verbatim; VrPassthroughGeometry handles portrait buffers and keeps the window
+ *    landscape. The status board prints the sampled ratio so this is checkable on-device.
+ *
  * The camera is ALWAYS released when the VR host leaves the composition (see
  * VrTheaterRenderer.onRendererShutdown), so the stream's own camera recording can take it back.
  */
@@ -66,11 +76,13 @@ internal class VrPassthroughCamera(
         /**
          * Called on the camera thread once the device is open, BEFORE the capture session starts.
          *
-         * [width] / [height] are the REAL preview buffer size chosen from StreamConfigurationMap —
-         * the renderer MUST build its window quad from these (after applying the effective
-         * rotation) so the picture is never stretched. [fps] is the frame rate actually written
-         * into the AE request (can be lower than requested on a 30 fps-only phone).
-         * [autoRotationDeg] is the sensor-installation angle used by the AUTO rotation setting;
+         * [width] / [height] are the REAL, VERBATIM preview buffer size chosen from
+         * StreamConfigurationMap (a genuine portrait size stays portrait — it is NOT swapped into
+         * a fake landscape size). The renderer uses it only to centre-crop the sampled UVs; the
+         * WINDOW shape always comes from the user's 4:3 / 16:9 choice, so no buffer ratio can
+         * stretch the picture. [fps] is the frame rate actually written into the AE request (can
+         * be lower than requested on a 30 fps-only phone).
+         * [autoRotationDeg] is the AUTO rotation baseline (always 0° while VR forces landscape);
          * [autoMirror] is the front-lens default mirroring. The renderer only stores these as
          * volatile fields.
          */
@@ -359,8 +371,14 @@ internal class VrPassthroughCamera(
      * Priority:
      *   1. ratio matches the requested aspect (3% tolerance) AND short edge is nearest the tier;
      *   2. otherwise the nearest short edge overall.
-     * Portrait entries are excluded (see below). The REAL size is reported to the renderer, which
-     * uses it to centre-crop the sampled UVs, so a mismatched ratio never stretches the picture.
+     *
+     * Landscape entries are preferred, but the chosen size is now reported VERBATIM — including a
+     * genuine portrait entry when that is all a vendor advertises. Previously normaliseLandscape()
+     * swapped a 720x1280 buffer into "1280x720" before both `setDefaultBufferSize()` and
+     * `onPreviewConfig()`, so on devices that kept producing a portrait buffer the renderer cropped
+     * the wrong axis and the picture looked stretched. VrPassthroughGeometry now handles ANY raw
+     * W/H (portrait included) and keeps the WINDOW landscape, so no lying about the buffer is
+     * needed — or safe.
      */
     private fun choosePreviewSize(chars: CameraCharacteristics?, targetW: Int, targetH: Int): Size {
         val sizes: Array<Size> = try {
@@ -370,10 +388,9 @@ internal class VrPassthroughCamera(
             emptyArray()
         }
         if (sizes.isEmpty()) return Size(targetW, targetH)
-        // Some vendors advertise PORTRAIT entries (e.g. 720x1280). Selecting one would make the
-        // renderer build a portrait window, which is the reported "竖屏 9:16" class of bug.
-        // Prefer landscape sizes; if a device advertises nothing else, use the full list but
-        // normalise the chosen size to landscape before reporting it.
+        // Prefer landscape entries (fewer rotations needed), but NEVER rewrite the reported size:
+        // the window shape no longer follows the buffer, and a faked landscape size makes the
+        // renderer crop the wrong axis on devices that actually deliver a portrait buffer.
         val landscape = sizes.filter { it.width >= it.height }
         val candidates: List<Size> = if (landscape.isNotEmpty()) landscape else sizes.toList()
         val targetAspect = targetW.toFloat() / targetH.toFloat()
@@ -389,7 +406,7 @@ internal class VrPassthroughCamera(
                 bestMatch = s
             }
         }
-        if (bestMatch != null) return normaliseLandscape(bestMatch)
+        if (bestMatch != null) return bestMatch
 
         var best = candidates[0]
         var bestDelta = Int.MAX_VALUE
@@ -400,12 +417,8 @@ internal class VrPassthroughCamera(
                 best = s
             }
         }
-        return normaliseLandscape(best)
+        return best
     }
-
-    /** Guarantees width >= height so onPreviewConfig() can never describe a portrait buffer. */
-    private fun normaliseLandscape(size: Size): Size =
-        if (size.width >= size.height) size else Size(size.height, size.width)
 
     /**
      * Highest AE fps range whose upper bound is within the requested tier (15 / 30 / 60). A 15 fps

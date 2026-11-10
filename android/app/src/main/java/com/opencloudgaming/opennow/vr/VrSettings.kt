@@ -40,9 +40,11 @@ enum class VrPassthroughFacing { FRONT, BACK }
 /**
  * Aspect ratio of the passthrough WINDOW. It is ALWAYS LANDSCAPE (4:3 or 16:9) and NEVER derived
  * from the preview rotation — the 2026-11-09 "竖屏 9:16" regression came exactly from taking the
- * reciprocal of the preview aspect for a 90° turn. The real Camera2 buffer ratio only decides how
- * much of the buffer is centre-cropped into this window (VrPassthroughGeometry), so no pixels are
- * ever stretched.
+ * reciprocal of the preview aspect for a 90° turn. The REAL, VERBATIM Camera2 buffer ratio
+ * (portrait included) only decides how much of the buffer is centre-cropped into this window
+ * (VrPassthroughGeometry.bufferCrop), and the crop axes are swapped for a 90/270 turn, so no pixels
+ * are ever stretched at any rotation. The status board prints the sampled ratio for on-device
+ * verification.
  *
  * FOUR_THREE is the default on purpose: the vast majority of phone camera sensors are natively
  * 4:3 (e.g. 4032x3024), and a 16:9 preview is just a cropped/centre-cut of that sensor. Using
@@ -75,9 +77,10 @@ enum class VrPassthroughMode { OVERLAY, CAMERA_MAIN, SIDE_BY_SIDE }
  * P720 / P1080 are offered for faster phones / higher-detail viewers.
  *
  * This is a TARGET, not a hardcoded buffer size: VrPassthroughCamera picks the closest size the
- * device actually advertises in StreamConfigurationMap (preferring an exact aspect match), and the
- * renderer builds the window quad from that REAL size. So the picture is never stretched even when
- * the device has no exact 640x480 / 1280x720 preview mode.
+ * device actually advertises in StreamConfigurationMap (preferring an exact aspect match) and
+ * reports it VERBATIM, portrait included. The window quad is always built from the USER's 4:3 /
+ * 16:9 choice; the real buffer size only feeds the centre-crop maths. So the picture is never
+ * stretched even when the device has no exact 640x480 / 1280x720 preview mode.
  */
 enum class VrPassthroughResolution(val shortEdge: Int) { P360(360), P480(480), P720(720), P1080(1080) }
 
@@ -205,9 +208,19 @@ data class VrSettings(
     /** When true, mirrors the STREAM only, left-right. Status panel, menu and 360° background are
      *  untouched. Implemented with quad texture coordinates, no shader source change. */
     val horizontalMirror: Boolean = false,
-    /** When true, flips the STREAM only, top-bottom. Status panel, menu and 360° background are
-     *  untouched. Independent of [horizontalMirror]; enabling both rotates the stream by 180°. */
-    val verticalFlip: Boolean = false,
+    /**
+     * When true, flips the STREAM only, top-bottom. Status panel, menu and 360° background are
+     * untouched. Independent of [horizontalMirror]; enabling both rotates the stream by 180°.
+     *
+     * DEFAULT IS TRUE on purpose: the MediaCodec -> SurfaceTexture (GL_TEXTURE_EXTERNAL_OES) path
+     * delivers its texels with a top-bottom inverted V axis relative to the quad we draw, so with
+     * the switch off the streamed picture is upside down. Real-device feedback on v0.8.0 confirmed
+     * users had to turn this ON manually every fresh install ("串流窗口画面朝向默认反了"). Keeping
+     * the field (and the menu/2D toggle) means it is still fully adjustable — turn it OFF to see
+     * the raw sampling — but a fresh install, "恢复默认" and a cleared SharedPreferences store all
+     * now show an UPRIGHT stream. Pure CPU UV-buffer work, NO shader source change.
+     */
+    val verticalFlip: Boolean = true,
     /** When true, draws a 360° (equirectangular) image as the VR environment behind the screen.
      *  Off by default to keep the original pure-black behaviour and the low-end perf budget. */
     val backgroundEnabled: Boolean = false,
