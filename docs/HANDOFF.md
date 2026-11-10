@@ -2074,3 +2074,21 @@ CI 的 Gradle 下载加固与预热步骤。
 > **回退路径**：`v0.7.0` 的 tag / Release / APK / r7 导出包均在，
 > 若合并版本真机不可用，可直接回退到 `0e387d0`（`v0.7.0`）这个已验证基线。
 
+### 24.9 交付（2026-11-10）
+
+| 版本 | 性质 | 内容 |
+| --- | --- | --- |
+| **`v0.7.0`** | **正式版 / Stable** | Release ID `438940588`，`prerelease=false`，3 个资源 `state=uploaded`；用户真机复测通过。**保持不动，不被合并版覆盖** |
+| **`v0.8.0`** | **Pre-release** | Release ID `440214109`，<https://github.com/XYkadicloud/OpenNOW-VR/releases/tag/v0.8.0>；tag 在 `fd743ea`。3 个资源：`app-arm64-v8a-debug.apk` **62078136 B**、`sdk-debug.aar` **388092 B**、`OpenNOW-VR-modules-20261110-r8.zip` **474907 B**（54 entries） |
+
+- `upstream-2.3.8` 分支在 CI 绿灯后 **fast-forward 合入 `main`**（`0e387d0..fd743ea`），
+  tag `v0.8.0` 打在 `fd743ea`；之后若有纯文档提交，`main` 只领先 docs-only commit，代码相同。
+- **r8 导出包**（第 8 次导出）与 r7 的差异：`src/vr/` 18 个 VR 核心模块 +
+  `src/tests/` 中 8 个 VR JVM 单测 = **26 个 VR 专属文件逐字节一致**；
+  17 个共享文件随官方 2.3.8 / 文档更新变化，其中
+  `OnScreenControlsSettingsInstrumentedTest.kt` 采用上游 mouse mode 用例并保留
+  `onEnterVr = { }`。包内新增 `05_上游2.3.8合并说明.md`（来源核实、三方合并策略、
+  两处冲突、完整性校验、采用 / 保留清单、回退）。
+- **下一步只剩真机复测**：合并版复测通过后，才考虑把 `v0.8.0` 转正式版或发更高版本；
+  复测不通过就按回退路径回到 `v0.7.0`。
+
