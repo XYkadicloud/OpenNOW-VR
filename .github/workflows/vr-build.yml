@@ -17,7 +17,7 @@ permissions:
 jobs:
   # Google Cardboard SDK v1.36.0 has no Maven artifact. Build the AAR once from the vendored
   # upstream sources and hand it to the app job as an artifact. This is a SEPARATE Gradle build
-  # (AGP 9.2.0 / Gradle 9.8.0) from the host app (AGP 9.4.0 / Gradle 9.7.1).
+  # (AGP 9.2.0 / Gradle 9.8.0) from the host app (AGP 9.4.0 / Gradle 9.8.2).
   cardboard-aar:
     name: build-cardboard-sdk-aar
     runs-on: ubuntu-24.04
@@ -163,7 +163,7 @@ jobs:
           mv -v app/libs/sdk-debug.aar app/libs/cardboard-sdk.aar
           ls -la app/libs
 
-      # Same transient-download guard as the SDK job, but for the host app's gradle-9.7.1 dist.
+      # Same transient-download guard as the SDK job, but for the host app's gradle-9.8.2 dist.
       - name: Warm the Gradle distribution (retry transient download timeouts)
         shell: bash
         run: |

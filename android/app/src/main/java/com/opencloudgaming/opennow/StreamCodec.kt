@@ -623,12 +623,14 @@ internal fun signalingUrlForDiagnostics(url: String, sessionId: String): String 
 internal enum class SignalingFailureDisposition {
     RetryTransport,
     RetrySignaling,
+    RecoverPeer,
     RecoverSession,
     SessionEnded,
 }
 
 internal fun signalingFailureDisposition(message: String): SignalingFailureDisposition = when {
     message.contains("http=410", ignoreCase = true) -> SignalingFailureDisposition.SessionEnded
+    message.contains("peerRemoved", ignoreCase = true) -> SignalingFailureDisposition.RecoverPeer
     message.contains("http=404", ignoreCase = true) ||
         message.contains("Not Found", ignoreCase = true) -> SignalingFailureDisposition.RecoverSession
     isTransientSignalingServiceFailure(message) -> SignalingFailureDisposition.RetrySignaling
@@ -652,7 +654,8 @@ internal fun shouldPreserveMediaAfterSignalingFailure(
 ): Boolean {
     if (
         disposition != SignalingFailureDisposition.RetryTransport &&
-        disposition != SignalingFailureDisposition.RetrySignaling
+        disposition != SignalingFailureDisposition.RetrySignaling &&
+        disposition != SignalingFailureDisposition.RecoverPeer
     ) {
         return false
     }

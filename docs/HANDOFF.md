@@ -65,6 +65,11 @@ https://github.com/XYkadicloud/OpenNOW-VR
 | 上游组织主项目 | `https://github.com/OpenCloudGaming/OpenNOW`，默认分支 `main`，描述 `Custom GeForce Now Client Named OpenNOW` |
 
 > 2.3.8 **不是**这些仓库里的 tag，来自应用内更新 API，见 2.3 / 4.2 节。
+>
+> **2026-11-10 更正**：上表漏查了官方主仓库 `OpenCloudGaming/OpenNOW` 的
+> **`android-native` 分支** —— 其 HEAD `34727ff764` 就是 2.3.8 源码
+> （`versionCode=193`）。该分支已完整三方合并进本工程，见 **§24**。
+> 「2.3.8 无可合并公开源码」只对 fork 仓库与更新接口成立。
 
 ### 1.3 只读参考副本（**不要改，不要提交**）
 
@@ -184,7 +189,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 | ~~P3：VR 内部、戴头显时用手柄操作的设置面板~~ | **已于 `9fb1d16` 之后完成并持续扩充**：VR 内菜单现 21 行（含瞳距、重置中心点、扫码、恢复默认、退出 VR），由 `VrGamepadRouter` 手柄驱动，长按 `START+SELECT` / `HOME/MODE` 打开。见 3.1 与 §14 |
 | **串流开始后才进入 VR（中途切换）** | **受解码器架构限制，未实现无缝**，详见 **8.5**。已核实：先进 VR 再开始串流可用；串流中才进 VR 时，解码器仍是纯 texture 路径，VR 的 `SurfaceTexture` 收不到画面 |
 | 完整 2D UI 镜像进 VR | 见 2.2，用户「可以试一下」的可选项，未实现 |
-| 上游 2.3.8 适配 | 阻塞：见 4.2 |
+| ~~上游 2.3.8 适配~~ | **已于 2026-11-10 完成**：官方 `OpenNOW/android-native` 2.3.8 源码三方合并，见 **§24**。此前「阻塞」结论已更正 |
 | 汉化 | 用户说「我其实只需要汉化就行」，语义未确认，**未执行**。不要擅自全量改文案 |
 | 上游 167 个 JVM 测试 | 未启用（引用 `android.*` 且无 Robolectric）。CI 只跑 `--tests "com.opencloudgaming.opennow.vr.*"` |
 
@@ -231,7 +236,7 @@ VR 内只需要界面时用轻量 Canvas 2D 面板。若后续仍要做完整 UI
 
 | 阻塞 | 需要用户提供 |
 | --- | --- |
-| 2.3.8 适配 | 2.3.8 的源码位置（仓库 / 分支 / diff / 压缩包）。**已核实**：上游 GitHub 只有 `android-native` 2.3.0/186 与 `zh-only` 2.2.9/185；2.3.8 来自应用内更新接口 `https://api.printedwaste.com/releases/opennow/latest`（`versionCode=193`、`releaseNotes="- NVST Fixes"`），目前只有 release APK 元数据，**没有可合并的公开源码** |
+| ~~2.3.8 适配~~ | **已解决（2026-11-10，见 §24）**：当时只查了 fork `XYkadicloud/OpenNOW-Android`（停在 2.3.0/186）与应用内更新接口，据此推断「无可合并源码」。实际上**官方主仓库 `OpenCloudGaming/OpenNOW` 的 `android-native` 分支** HEAD `34727ff764` 就是 2.3.8（`versionCode=193`），已完整三方合并。核验来源时不要只查 fork |
 | 汉化 | 是否要执行；若要，是否以 `zh-only` 分支文案为准 |
 | 完整 UI 镜像 | 是否坚持 2.2 的方案（需先做 PoC） |
 
@@ -303,7 +308,8 @@ docs/                                 见第 5 节
 6. **CI 全绿 ≠ 真机可用**：编译期不检查 `System.loadLibrary()` 是否有对应 `.so`。
 7. `libGfxPluginCardboard.so` 因 `cardboard_api.lds` 的 `local: *` 隐藏了所有 `Java_*` 符号，
    **不能**靠改名代替 `libcardboard_sdk_jni.so`。
-8. 2.3.8 **不是 GitHub tag**，是应用内更新 API；不要改 `versionName` 冒充适配。
+8. 2.3.8 **不是 GitHub tag**（是 `android-native` 分支 HEAD）；当时只查到应用内更新 API 元数据。
+   「不要改 `versionName` 冒充适配」这条原则仍然有效。**2026-11-10 已合并真实源码，见 §24**。
 9. `git push` 用 **Basic**，不是 Bearer；artifact 下载用 `/zip`，不是 `/archive`。
 10. **不要在 `onDrawEye()` 里 `glClear()`**：SDK 的 `onRenderStereoFrame()` 只绑一个 FBO、
     用 `glViewport` 分左右眼且**没有 scissor**，右眼的 clear 会抹掉左眼。黑底靠 `glClearColor()`。
@@ -510,7 +516,7 @@ FPS 计数器即可，不要在 VR 里做软键盘（用户明确禁止）。
   CI **不能**证明：画面正常、shader 编译通过、串流切换不黑屏、低端机不发热。
 - `PANEL_FLIP_Y = 0.0f` 是基于 `VrScreenGeometry` 的 `top v=0` 与 `GLUtils` 上传约定的推理；
   真机若文字上下颠倒，改这一个常量即可。
-- 上游 2.3.8 无可合并源码，适配处于阻塞状态。
+- ~~上游 2.3.8 无可合并源码，适配处于阻塞状态~~ → **已更正并完成合并，见 §24**。
 - PAT 曾明文出现在对话中，任务结束后应撤销重建。
 
 ---
@@ -1913,5 +1919,122 @@ r7 代码（`ac584b7`）**首次在 CI 完整编译通过**，无任何非代码
 - `OpenNOW-VR-modules-20261108-r7.zip`：以 r6 为基底，覆盖 8 个变动文件、新增
   `VrPassthroughGeometry.kt` / `VrPassthroughGeometryTest.kt`，重生成 6 份说明文件（同步
   `ac584b7` / 纯文档提交 / `42590354856`）。
-- v0.7.0 Release：待生成（含 debug APK、r7 zip、AAR）。
+- v0.7.0 Release：**已发布并转为正式版**（2026-11-10 用户真机复测通过，`prerelease=false`），
+  Release ID `438940588`，含 `app-arm64-v8a-debug.apk` 61995484 B、
+  `OpenNOW-VR-modules-20261108-r7.zip` 466847 B、`sdk-debug.aar` 388092 B。
+  URL `https://github.com/XYkadicloud/OpenNOW-VR/releases/tag/v0.7.0`。
+  **该版本为合并上游 2.3.8 之前、已真机验证的稳定基线。**
+
+---
+
+## 24. 2026-11-10 合并官方上游 2.3.8 源码（用户要求）
+
+### 24.1 用户诉求（原话）
+
+> 「OK，目前我测试完了，已经可以弄成正式版了，然后还有就是呢，呃上游仓库那边更新了
+> 2.3.8 版本，实际是有更新到了 4.0 版本，但是公开源码只有到这个版本。所以说你更新一下，
+> 合并一下源码。」
+
+两件事：**① v0.7.0 转正式版**（用户已完成真机复测）；**② 合并上游 2.3.8 公开源码**。
+
+### 24.2 来源核实（先查清，不凭旧结论）
+
+| 来源 | 核实结果 |
+| --- | --- |
+| fork `XYkadicloud/OpenNOW-Android` @ `android-native` | HEAD 仍为 `8811a74`，`2.3.0 / 186`，**未更新**；tags 只到 `v2.3.0-console.1` |
+| `OpenCloudGaming/OpenNOW-Android` @ `main` | 只有一个 `README.md`，无源码 |
+| **`OpenCloudGaming/OpenNOW` @ `android-native`** | **HEAD `34727ff764`（2026-11-02）**，`android/app/build.gradle.kts` 为 `versionCode = 193` / `versionName = "2.3.8"`。2.3.0 (`47a76fa6c0`) → 2.3.8 共 **7 个提交、81 个变更文件** |
+| 应用内更新接口 `api.printedwaste.com/releases/opennow/latest` | 当前返回 **`2.4.1` / `versionCode 197`**（`- SSID option for status bar`、`- Time option for status bar`），说明**发布版比公开源码更新**；公开源码仍停在 2.3.8 |
+
+**因此更正此前结论**：§4.2 / §7 / 计划书 12.3 记录的「2.3.8 无可合并公开源码、适配阻塞」，
+只是当时**漏查了官方主仓库的 `android-native` 分支**（fork 与更新接口确实没有）。
+2.3.8 不是 tag，是分支 HEAD；**7 个提交、81 个文件都是可合并的真实源码**。
+用户所说「实际版本更靠前、公开源码只到 2.3.8」与核实结果一致（我实测到的发布版是 2.4.1）。
+**再往后的版本目前仍无可合并源码，不要改 `versionName` 冒充适配** —— 这条原则继续有效。
+
+### 24.3 合并策略（三方，不覆盖 VR）
+
+本工程是整仓复制 fork 2.3.0 后**重新 `git init`** 的独立历史，与官方仓库无共享 git 对象，
+不能靠 `git merge` / `cherry-pick`。采用**文件级三方合并**：
+
+| 角色 | 版本 |
+| --- | --- |
+| base | 官方 2.3.0 `47a76fa6c0`（fork 与官方的共同上游基线；`git merge-base` 为 `13db8f05`） |
+| ours | 当前 VR 工作树（fork 14 个提交的电视版改动 + 全部 VR 实现） |
+| theirs | 官方 2.3.8 `34727ff764` |
+
+分类依据：把 VR 工程当前文件与 **fork 2.3.0 `8811a74`** 逐字节比较 —— 相同 ⇒ VR 未动，
+可安全采用官方 2.3.8；不同 ⇒ 必须 `git merge-file` 三方合并。
+
+| 类别 | 数量 | 处理 |
+| --- | --- | --- |
+| 上游修改、VR 未动 | **57** | 直接写入官方 2.3.8 版本 |
+| 上游新增文件 | **13** | 直接加入（8 个 main/test 新增类、4 个 instrumentation 测试、1 个 `gfn/subscription-free.json`） |
+| 上游修改且与 VR 重叠 | **11** | `git merge-file -p` 三方合并；9 个零冲突、2 个人工解决 |
+| 合计 | **81** | 与 `git diff --name-status` 完全对齐，无遗漏 |
+
+### 24.4 两处人工解决的冲突（有意为之，不是妥协）
+
+1. **`OpenNowStreamControls.kt`**：上游 2.3.8 在少/多控制按钮前插入了 ~100 行新的
+   「鼠标模式」分区 `ControlSection(keyboard_overlay_category_mouse)`，与 VR 的
+   「进入 VR」`item` 撞在同一处，`git merge-file` 产生 1 处冲突。
+   **解法**：以官方 2.3.8 **全文**为准，再把 VR 的两处改动重新注入 ——
+   `StreamControlsPanel` 增加 `onEnterVr: () -> Unit` 参数、在
+   `stream_panel_less_controls` 那个 `item` 前插入「进入 VR」按钮。
+   上游鼠标分区与 VR 按钮**都保留**。
+2. **`android/gradle/wrapper/gradle-wrapper.properties`**：ours 是 `gradle-9.7.1` +
+   我们的 CI 加固参数，theirs 是 `gradle-9.8.2` + 上游默认 `networkTimeout=10000 /
+   retries=0 / retryBackOffMs=500` + `validateDistributionUrl=true`。
+   **解法**：采用上游 `9.8.2` 与 `validateDistributionUrl=true`，**保留**
+   `networkTimeout=120000 / retries=5 / retryBackOffMs=2000`。
+   理由：CI `42572527294` 之前两次红灯都是 `services.gradle.org` 下载超时，
+   回退到 10 秒 / 0 重试会重现该故障（`e00287a` 的加固不能丢）。
+   `third_party/cardboard` 的 wrapper 属独立 SDK 工程，仍为 `9.8.0`，**不受影响**。
+
+### 24.5 完整性校验（合并写盘前后都跑了）
+
+- 11 个重叠文件逐一计算「**VR 相对 fork 2.3.0 新增的每一行**」与
+  「**官方 2.3.8 相对 2.3.0 新增的每一行**」，检查合并结果是否都包含 →
+  **缺失 0 / 11**（唯一白名单是 wrapper 里上游那 3 个被有意替换的默认超时值）。
+- 全 `android/` 扫描残留 `<<<<<<<` / `>>>>>>>` → **0 处**。
+- `R.string` 引用 **1327** 个：checked-in 资源 1403 + `preBuild` 由
+  `generateTouchButtonResources` 从 `locales/en.json` 生成的 366 个键 →
+  **真实缺失 0**（`ok` 是 `android.R.string.ok` 系统资源、
+  `stream_panel_clear` 是 `<item type="string">` 别名，均为检查脚本假阳性）。
+  上游新增 `PublishedBugs` UI 的 26 个 `published_bugs_*` 字符串正是由该生成任务产出，
+  合入 `locales/en.json` 后自动齐备。
+- `git -c core.whitespace=cr-at-eol diff --check` 干净；上游 `gradlew.bat` 是
+  CRLF（Windows 批处理正确）、`gradlew` 是 LF（Linux 可执行），均保持原样。
+- 本机无 Android SDK / JDK 17（只有 Java 8），**编译验证只能在 GitHub CI 上做**。
+
+### 24.6 保留与采用清单
+
+**保留未动**：31 个设置项、VR 菜单 5 页 34 行、2D 设置页 13 个滑块、
+`VrSession` / `VrGamepadRouter` / `VrTheaterRenderer` / `VrPassthroughGeometry` 等全部 VR 模块、
+`minSdk=24`、`cardboard-sdk.aar` 及 4 个显式传递依赖、
+`VrSettingsSection` 原生设置分区、shader / `GL_BLEND` / Cardboard SDK GL 状态、
+CI 的 Gradle 下载加固与预热步骤。
+
+**同步采用**：`versionCode=193` / `versionName="2.3.8"`、Gradle 9.8.2 wrapper（jar / 脚本 / properties）、
+`validateDistributionUrl`、上游 NVST / WebRTC 与信令恢复修复（`RecoverPeer`）、
+`GfnServerInfo` + 订阅解析、`PublishedBugs` 已发布问题页、`MediaCodecDiagnostics`、
+`DoubleTapDirectClickGesture` 与实验性「滑动 + 直接点击」、鼠标模式分区、
+`locales/en.json` 新文案、`changelogs.json`、上游 4 个 instrumentation 测试与 4 个 JVM 测试。
+
+### 24.7 验证与待办
+
+| 项 | 状态 |
+| --- | --- |
+| v0.7.0 转正式版 | **已完成**：`prerelease=false`，3 个资源 `state=uploaded`，用户真机复测通过 |
+| 三方合并 + 完整性校验 | **已完成**（见 24.5） |
+| **CI 全量编译 + JVM 单测 + 出 APK** | 见 §24.8 |
+| **真机复测合并后的 VR** | **待办**：上游 Kotlin 全量重编译后，VR 入口、串流画面、透视窗口、菜单滚动、手柄输入都需重新确认 |
+| 再往后的上游版本 | **仍无可合并源码**，维持现状 |
+
+### 24.8 CI 验证结论
+
+（待 CI 结果出来后补写，含 run id、两个 job 结论、测试数、产物字节数。）
+
+> **回退路径**：`v0.7.0` 的 tag / Release / APK / r7 导出包均在，
+> 若合并版本真机不可用，可直接回退到 `0e387d0`（`v0.7.0`）这个已验证基线。
 

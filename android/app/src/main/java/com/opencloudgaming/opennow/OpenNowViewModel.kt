@@ -327,6 +327,7 @@ data class OpenNowUiState(
     val diagnosticShare: DiagnosticShareState = DiagnosticShareState(),
     val bugReportSubmission: BugReportSubmissionState = BugReportSubmissionState(),
     val bugReportThreads: AndroidBugReportThreadsState = AndroidBugReportThreadsState(),
+    val publishedBugs: AndroidPublishedBugsState = AndroidPublishedBugsState(),
     val bugReportVersionCheck: AndroidBugReportVersionCheckState = AndroidBugReportVersionCheckState(),
     val loginToolsVisible: Boolean = false,
     val localTvConnector: LocalTvConnectorState = LocalTvConnectorState(),
@@ -488,7 +489,8 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
     private val sessionTimerAnchorStore = SessionTimerAnchorStore(application)
     private val authStore = openNowApplication.authStore
     private val authRepository = openNowApplication.authRepository
-    private val catalogRepository = GfnCatalogRepository(http) {
+    private val serverInfoRepository = openNowApplication.serverInfoRepository
+    private val catalogRepository = GfnCatalogRepository(http, serverInfoRepository) {
         gfnLocaleForAndroidLanguageTag(currentAndroidAppLocale(getApplication()).effectiveLanguageTag)
     }
     private val catalogCacheStore = CatalogCacheStore(application)
@@ -501,6 +503,7 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
     private val sessionRepository = GfnSessionRepository(
         authStore = authStore,
         http = http,
+        serverInfoRepository = serverInfoRepository,
         physicalDisplayResolutionProvider = { application.physicalStreamDisplayResolution() },
         diagnosticsSink = { response -> recordSessionDiagnosticResponse(response) },
         isAndroidTv = isAndroidTvProfile(application),
@@ -590,7 +593,6 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
     private var gamesJob: Job? = null
     private var gameDetailsJob: Job? = null
     private var launchJob: Job? = null
-    private var externalLaunchJob: Job? = null
     private var activeSubscriptionJob: Job? = null
     private var pendingActiveSessionLaunch: PendingActiveSessionLaunch? = null
     private var launchInputModeChoice: CompletableDeferred<LaunchInputModeChoice>? = null
@@ -1118,6 +1120,69 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
     fun resetBugReportSubmission() {
         if (state.value.bugReportSubmission.uploading) return
         _state.update { it.copy(bugReportSubmission = BugReportSubmissionState()) }
+    }
+
+    // Keep an upload ID after a transport failure so retrying cannot submit the same logs twice.
+    private val publishedBugUploadIds = mutableMapOf<String, String>()
+
+    fun refreshPublishedBugs(loadMore: Boolean = false) {
+        val current = state.value.publishedBugs
+        if (current.loading || current.actingBugId != null || (loadMore && current.nextCursor == null)) return
+        _state.update { it.copy(publishedBugs = it.publishedBugs.copy(loading = true, error = null)) }
+        viewModelScope.launch {
+            try {
+                val page = fetchAndroidPublishedBugs(http, androidBugReportReporterId(authStore.stableDeviceId()), if (loadMore) current.nextCursor else null)
+                _state.update { it.copy(publishedBugs = it.publishedBugs.copy(
+                    loading = false,
+                    bugs = if (loadMore) (it.publishedBugs.bugs + page.bugs).distinctBy(AndroidPublishedBug::id) else page.bugs,
+                    nextCursor = page.nextCursor,
+                )) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _state.update { it.copy(publishedBugs = it.publishedBugs.copy(loading = false, error = error.message ?: "Could not load published bugs")) }
+            }
+        }
+    }
+
+    fun votePublishedBug(bugId: String) = contributeToPublishedBug(bugId, uploadLogs = false)
+
+    fun uploadPublishedBugLogs(bugId: String) = contributeToPublishedBug(bugId, uploadLogs = true)
+
+    private fun contributeToPublishedBug(bugId: String, uploadLogs: Boolean) {
+        val current = state.value.publishedBugs
+        if (current.loading || current.actingBugId != null) return
+        val bug = current.bugs.firstOrNull { it.id == bugId } ?: return
+        if (uploadLogs && !bug.acceptingLogs) return
+        _state.update { it.copy(publishedBugs = it.publishedBugs.copy(actingBugId = bugId, uploadingLogs = uploadLogs, error = null, uploadedBugId = null)) }
+        viewModelScope.launch {
+            try {
+                val reporterId = androidBugReportReporterId(authStore.stableDeviceId())
+                val updated = if (uploadLogs) {
+                    val submissionId = publishedBugUploadIds.getOrPut(bugId) { java.util.UUID.randomUUID().toString() }
+                    uploadAndroidPublishedBugLog(http, reporterId, bugId, submissionId, bugReportLogAttachment())
+                    publishedBugUploadIds.remove(bugId)
+                    null
+                } else voteAndroidPublishedBug(http, reporterId, bugId, !bug.voted)
+                _state.update { it.copy(publishedBugs = it.publishedBugs.copy(
+                    actingBugId = null,
+                    uploadingLogs = false,
+                    uploadedBugId = if (uploadLogs) bugId else null,
+                    bugs = it.publishedBugs.bugs.map { item -> if (item.id == bugId) updated ?: item.copy(logCount = item.logCount + 1) else item },
+                )) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _state.update { it.copy(publishedBugs = it.publishedBugs.copy(
+                    actingBugId = null,
+                    uploadingLogs = false,
+                    error = error.message ?: "Could not contribute to this bug",
+                    bugs = if ((error as? AndroidBugReportUploadException)?.serverCode == "LOG_COLLECTION_PAUSED") {
+                        it.publishedBugs.bugs.map { item -> if (item.id == bugId) item.copy(acceptingLogs = false) else item }
+                    } else it.publishedBugs.bugs,
+                )) }
+            }
+        }
     }
 
     fun refreshBugReportThreads() {
@@ -2425,8 +2490,7 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
                 }.getOrNull()
             }
             val regions = async {
-                runCatching { fetchDynamicRegions(http, token, session.provider.streamingServiceUrl).first }
-                    .getOrDefault(emptyList())
+                serverInfoRepository.regions(token, session.provider.streamingServiceUrl)
             }
             val fetchedSubscription = subscription.await()
             val enrichedSession = persistSubscriptionTier(session, fetchedSubscription)
@@ -2877,7 +2941,7 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
                     regions = state.value.regions,
                     refreshRegions = {
                         withContext(Dispatchers.IO) {
-                            fetchDynamicRegions(http, token, auth.provider.streamingServiceUrl).first
+                            serverInfoRepository.regions(token, auth.provider.streamingServiceUrl)
                         }
                     },
                 )
@@ -3552,11 +3616,6 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         recordDebugEvent("queue", "PrintedWaste selection game=${game.title} zone=${hostForDebug(zoneUrl)} auto=${zoneUrl == null}")
-        if (zoneUrl != null) {
-            // Remember the server the player just picked. Settings > Stream shows it as the default,
-            // so turning on "skip the server picker" starts queueing here without another prompt.
-            updateStreamSettings { it.copy(region = zoneUrl) }
-        }
         launchJob?.cancel()
         launchJob = null
         _state.update {
@@ -4132,40 +4191,18 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
         }
         val id = extractExternalLaunchId(intent)
         if (id.isNullOrBlank()) return
-        val fallbackTitle = intent.getStringExtra("title") ?: "Game $id"
-        externalLaunchJob?.cancel()
-        // A pinned home-screen shortcut cold-starts the app, so the catalog request is still in
-        // flight when this intent arrives. Launching the placeholder right away reaches GFN with no
-        // store variant and fails, so wait for the real entry when one is on the way.
-        externalLaunchJob = viewModelScope.launch {
-            val resolved = awaitCatalogGame(id)
-            val game = resolved ?: GameInfo(
-                id = id,
-                uuid = id,
-                launchAppId = id.takeIf { it.all(Char::isDigit) },
-                title = fallbackTitle,
-                selectedVariantIndex = 0,
-                variants = listOf(GameVariant(id = id, store = "Unknown")),
-            )
-            play(game)
-        }
-    }
-
-    /** Polls until [id] appears in the catalog, or until the catalog has clearly finished loading. */
-    private suspend fun awaitCatalogGame(id: String, timeoutMs: Long = 12_000L): GameInfo? {
-        val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        var settledChecks = 0
-        while (SystemClock.elapsedRealtime() < deadline) {
-            val snapshot = state.value
-            val match = (snapshot.games + snapshot.libraryGames).firstOrNull { game ->
-                game.id == id || game.uuid == id || game.launchAppId == id || game.variants.any { it.id == id }
-            }
-            if (match != null) return match
-            settledChecks = if (snapshot.games.isNotEmpty() && !snapshot.loadingGames) settledChecks + 1 else 0
-            if (settledChecks >= 3) return null
-            delay(250)
-        }
-        return null
+        val allGames = state.value.games + state.value.libraryGames
+        val game = allGames.firstOrNull { game ->
+            game.id == id || game.uuid == id || game.launchAppId == id || game.variants.any { it.id == id }
+        } ?: GameInfo(
+            id = id,
+            uuid = id,
+            launchAppId = id.takeIf { it.all(Char::isDigit) },
+            title = intent.getStringExtra("title") ?: "Game $id",
+            selectedVariantIndex = 0,
+            variants = listOf(GameVariant(id = id, store = "Unknown")),
+        )
+        play(game)
     }
 
     private fun extractExternalLaunchId(intent: Intent): String? {
@@ -4527,7 +4564,7 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
         }
         val regionsJob = viewModelScope.launch {
             val regions = withContext(Dispatchers.IO) {
-                runCatching { fetchDynamicRegions(http, token, session.provider.streamingServiceUrl).first }.getOrDefault(emptyList())
+                serverInfoRepository.regions(token, session.provider.streamingServiceUrl)
             }
             _state.update { it.copy(regions = regions) }
         }
@@ -4917,7 +4954,7 @@ class OpenNowViewModel(application: Application) : AndroidViewModel(application)
                 val queue = async { printedWasteRepository.fetchQueue() }
                 val mapping = async { printedWasteRepository.fetchServerMapping() }
                 val providerRegions = async {
-                    fetchDynamicRegions(http, token, auth.provider.streamingServiceUrl).first
+                    serverInfoRepository.regions(token, auth.provider.streamingServiceUrl)
                         .ifEmpty { state.value.regions }
                 }
                 val queueData = queue.await()

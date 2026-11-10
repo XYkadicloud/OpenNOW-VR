@@ -636,8 +636,8 @@ private fun SettingsBody(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsDetailHeader(
-                    title = stringResource(selectedCategory.titleRes),
-                    summary = stringResource(selectedCategory.summaryRes),
+                    title = if (selectedCategory == SettingsCategory.BugReports) "" else stringResource(selectedCategory.titleRes),
+                    summary = if (selectedCategory == SettingsCategory.BugReports) null else stringResource(selectedCategory.summaryRes),
                     tvProfile = tvProfile,
                     controllerFamily = controllerFamily,
                     onBack = onBack,
@@ -1768,18 +1768,26 @@ private fun SettingsContent(
                     searchMode = searchQuery.isNotBlank(),
                 )
             }
-    CategorySettingsSection(selectedCategory, SettingsCategory.BugReports, searchQuery, stringResource(R.string.bug_report_inbox_title), "bug", "report", "issue", "status", "reply", "comment", "support") {
-                BugReportThreadsSettings(
-                    state = state.bugReportThreads,
-                    onRefresh = viewModel::refreshBugReportThreads,
-                    onNewReport = {
-                        viewModel.resetBugReportSubmission()
-                        showBugReportDialog = true
-                    },
-                    onComment = viewModel::commentOnBugReport,
-                    onClose = viewModel::closeBugReport,
-                    onDelete = viewModel::deleteBugReport,
-                )
+    CategorySettingsSection(selectedCategory, SettingsCategory.BugReports, searchQuery, if (selectedCategory == SettingsCategory.BugReports && searchQuery.isBlank()) "" else stringResource(R.string.settings_category_bug_reports), "bug", "report", "issue", "status", "reply", "comment", "support", "published", "vote", "logs") {
+                BugReportsSettings(
+                    publishedState = state.publishedBugs,
+                    onRefreshPublished = { viewModel.refreshPublishedBugs() },
+                    onLoadMore = { viewModel.refreshPublishedBugs(loadMore = true) },
+                    onVote = viewModel::votePublishedBug,
+                    onUploadLogs = viewModel::uploadPublishedBugLogs,
+                ) {
+                    BugReportThreadsSettings(
+                        state = state.bugReportThreads,
+                        onRefresh = viewModel::refreshBugReportThreads,
+                        onNewReport = {
+                            viewModel.resetBugReportSubmission()
+                            showBugReportDialog = true
+                        },
+                        onComment = viewModel::commentOnBugReport,
+                        onClose = viewModel::closeBugReport,
+                        onDelete = viewModel::deleteBugReport,
+                    )
+                }
             }
     CategorySettingsSection(selectedCategory, SettingsCategory.TvPairing, searchQuery, stringResource(R.string.tv_pair_settings_title), "tv", "pair", "phone", "qr", "code", "network") {
                 LocalTvSettingsPanel(
@@ -1788,7 +1796,7 @@ private fun SettingsContent(
                     showTitle = false,
                 )
             }
-    CategorySettingsSection(selectedCategory, SettingsCategory.Advanced, searchQuery, stringResource(R.string.settings_experimental_streaming), "experimental", "stream", "network", "dynamic", "adjustment", "nvst", "l4s", "session", "launch", "failure", "battery", "optimization", "background", "allow", "run") {
+    CategorySettingsSection(selectedCategory, SettingsCategory.Advanced, searchQuery, stringResource(R.string.settings_experimental_streaming), "experimental", "stream", "network", "dynamic", "adjustment", "nvst", "l4s", "session", "launch", "failure", "battery", "optimization", "background", "allow", "run", "slide", "direct click", "double tap", "finger", "mouse", "touch") {
                 if (!LocalSpaceUiPresentation.current) {
                     Text(
                         stringResource(R.string.settings_experimental_streaming_warning),
@@ -1797,7 +1805,14 @@ private fun SettingsContent(
                     )
                 }
                 SettingSwitch(
-                    label = "NVST transport (Experimental)",
+                    label = stringResource(R.string.stream_slide_direct_click_experimental),
+                    checked = settings.androidTouch.experimentalSlideDirectClick,
+                    description = stringResource(R.string.stream_slide_direct_click_description),
+                ) { enabled ->
+                    viewModel.updateSettings(settings.copy(androidTouch = settings.androidTouch.copy(experimentalSlideDirectClick = enabled)))
+                }
+                SettingSwitch(
+                    label = "NVST Transport",
                     checked = settings.stream.experimentalNvst,
                     description = "Try native NVST streaming for new sessions. Off by default while compatibility and stability issues are investigated.",
                 ) {

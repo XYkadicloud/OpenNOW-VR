@@ -1933,13 +1933,24 @@ class NativeStreamClient(
     }
 
     fun sendTouchMouseClick(delayBeforeDownMs: Long = 0L) {
+        sendTouchMouseClickAt(delayBeforeDownMs, position = null)
+    }
+
+    internal fun sendDirectClickMouseClick(position: AbsoluteMousePosition) {
+        sendTouchMouseClickAt(delayBeforeDownMs = 0L, position = position)
+    }
+
+    private fun sendTouchMouseClickAt(delayBeforeDownMs: Long, position: AbsoluteMousePosition?) {
         val sourceId = "touch-mouse-click-${System.nanoTime()}"
         scope.launch {
             if (delayBeforeDownMs > 0) delay(delayBeforeDownMs)
+            // Position and DOWN use the same reliable channel. Keep the ordinary click duration
+            // so games that poll button state each frame can observe a synthesized direct click.
+            if (position != null && !sendDirectClickMousePosition(position)) return@launch
             try {
-                if (setVirtualMouseButtonFromSource(1, sourceId, true)) delay(160L)
+                if (setVirtualMouseButtonFromSource(1, sourceId, true, sendPartiallyReliableCopy = position == null)) delay(160L)
             } finally {
-                setVirtualMouseButtonFromSource(1, sourceId, false)
+                setVirtualMouseButtonFromSource(1, sourceId, false, sendPartiallyReliableCopy = position == null)
             }
         }
     }
@@ -2683,6 +2694,12 @@ class NativeStreamClient(
                             }
                             "error" -> {
                                 lastNvstError = detail
+                                NativeInputDiagnostics.addRetained(
+                                    "nvst.attachment-failure",
+                                    "NVST attachment failed session=${streamDiagnosticId(session.sessionId)} " +
+                                        "generation=$generation settings=${settings.resolution}/${settings.fps}/" +
+                                        "${settings.codec}/${settings.maxBitrateMbps} detail=${sanitizeDiagnosticLogPayload(detail, limit = 1200)}",
+                                )
                                 recordStreamDiagnostic("NVST attachment failed: $detail")
                                 if (isNvstDecoderFailure(detail)) {
                                     failStream("$detail. Your cloud session is retained; retry when ready.", generation)
@@ -2847,6 +2864,7 @@ class NativeStreamClient(
                         recordStreamDiagnostic("Signaling reported a terminal session response; verifying allocated session before local exit.")
                         requestSessionRecovery("The provider reported that the signaling session ended.")
                     }
+                    SignalingFailureDisposition.RecoverPeer,
                     SignalingFailureDisposition.RecoverSession -> {
                         recordStreamDiagnostic("Signaling endpoint is stale. Recovering cloud session.")
                         requestSessionRecovery("Signaling endpoint became unavailable while connecting to the cloud session.")
@@ -2871,6 +2889,7 @@ class NativeStreamClient(
                         recordStreamDiagnostic("Signaling error reported a terminal session response; verifying allocated session before local exit.")
                         requestSessionRecovery("The provider reported that the signaling session ended.")
                     }
+                    SignalingFailureDisposition.RecoverPeer,
                     SignalingFailureDisposition.RecoverSession -> {
                         recordStreamDiagnostic("Signaling endpoint is stale. Recovering cloud session.")
                         requestSessionRecovery("Signaling endpoint became unavailable while connecting to the cloud session.")

@@ -43,12 +43,56 @@
 | **可选 360° 全景背景 + 用户导入图片** | **已实现**（默认关闭）：低多边形球体环境贴图、内置星空兜底、系统文件选择器导入 2:1 全景图 |
 | **VR 期间强制横向 + 真全屏** | **已实现**：锁 `SENSOR_LANDSCAPE`；隐藏 status/nav/systemGestures/displayCutout；`FLAG_LAYOUT_NO_LIMITS` + `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`。**注意：window flags 只解决系统栏/刘海，消不掉截图里那种上下大黑边** —— 那来自 Cardboard 畸变 mesh 的 FOV 截断，由上面的 `screenFillMode` 解决 |
 | 真机 / 纸盒 / GFN 串流效果 | **真机反馈确认可用后又反馈失败，已第二轮修复**：`f77f482` 真机 logcat 定案「进 VR 啥也没有」是 `VrModeHost` 竞态，层级修复后用户确认「现在的确能使用了」。但随后 `7a9abfb` 版真机截图暴露：基础状态面板被 180° 反转、串流朝向不对、辅助线贴在 VR 面板里跟头转、状态栏仍显示。**这些画面效果已重新实现（见 §4 与 `HANDOFF.md` §13），全部待真机复测**。CI 只能证明「能编译 + 单测通过 + 能出 APK」，GLSL 运行时编译与视觉朝向 CI 抓不到 |
+| **上游源码基线** | **已合并官方 2.3.8**（`OpenCloudGaming/OpenNOW` 的 `android-native` @ `34727ff764`，`versionCode=193`）：81 个文件三方合并，VR 全部功能完整保留，详见 §2.1 与 `HANDOFF.md` §24 |
 
 > 一句话：**框架、构建链、主界面回退、视频纹理、黑底渲染、手机端与 VR 内手柄设置面板、
 > 可导入的 360° 背景、瞳距调节、重置中心点、强制横向真全屏均已完成；串流朝向 / 基础 UI 正立 /
 > 辅助线层级 / 全屏铺满已按真机反馈逐轮重做，剩下的是这些画面效果的最新一轮真机复测**。
 > 接手的 Agent 请先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)（项目位置 / 状态 / 待办 / 文档索引），
 > 技术事实基线见 [`docs/VR_IMPLEMENTATION_PLAN.md`](docs/VR_IMPLEMENTATION_PLAN.md)。
+
+### 2.1 上游 2.3.8 源码合并（2026-11-10）
+
+**来源核实**：`2.3.8` 不是 tag，而是官方主仓库 `https://github.com/OpenCloudGaming/OpenNOW`
+的 **`android-native` 分支** HEAD `34727ff764`（`versionCode=193` / `versionName="2.3.8"`）。
+此前记录的「2.3.8 无可合并公开源码」只针对 fork `XYkadicloud/OpenNOW-Android`（停在 2.3.0/186）
+与应用内更新接口，**该结论对官方主仓库不成立，现已更正**。
+应用内更新接口 `https://api.printedwaste.com/releases/opennow/latest` 当前已返回
+**2.4.1 / versionCode 197**，即发布版比公开源码更新；公开源码目前只到 2.3.8，
+与「实际版本更靠前、公开源码只到这里」的判断一致。
+
+**合并方式（三方，不覆盖 VR）**：
+
+| 角色 | 内容 |
+| --- | --- |
+| base | 官方 2.3.0 `47a76fa6c0`（共同上游基线） |
+| ours | 当前 VR 工程（fork 2.3.0 的电视版改动 + 全部 VR 实现） |
+| theirs | 官方 2.3.8 `34727ff764`（2.3.1 → 2.3.8 共 7 个提交） |
+
+81 个变更文件 = **57 个** VR 未改动、直接采用上游 2.3.8；**13 个**上游新增文件直接加入；
+**11 个**与 VR 改动重叠、走 `git merge-file` 三方合并。重叠文件中 9 个自动无冲突，
+2 个人工解决：
+
+1. `OpenNowStreamControls.kt`：上游 2.3.8 新增鼠标分区与「进入 VR」按钮撞在同一处。
+   以官方 2.3.8 全文为准，重新注入 VR 的 `onEnterVr` 参数与「进入 VR」按钮。
+2. `android/gradle/wrapper/gradle-wrapper.properties`：采用上游 `gradle-9.8.2-bin.zip`
+   与 `validateDistributionUrl=true`，**保留**我们的 CI 加固参数
+   `networkTimeout=120000 / retries=5 / retryBackOffMs=2000`（此前两次 CI 红都是 Gradle
+   发行包下载超时，不能回退成上游的 10 秒 / 0 重试）。
+
+**完整性校验**：11 个重叠文件逐一比对「VR 相对 fork 2.3.0 新增的每一行」与
+「官方 2.3.8 相对 2.3.0 新增的每一行」，缺失 0；全工程无残留冲突标记；
+`R.string` 引用全部有定义（含 `preBuild` 从 `locales/en.json` 生成的 366 个键）。
+
+**保留未动**：31 个设置项、VR 菜单 5 页 34 行、2D 设置页 13 个滑块、
+`VrSession` / `VrGamepadRouter` / `VrTheaterRenderer` 等全部 VR 模块、
+`minSdk=24`、`cardboard-sdk.aar` 及 4 个显式传递依赖、shader / SDK GL 状态。
+**同步采用**：`versionCode=193` / `versionName="2.3.8"`、Gradle 9.8.2、
+上游 NVST/WebRTC 修复、`GfnServerInfo`、`PublishedBugs`、`MediaCodecDiagnostics`、
+`DoubleTapDirectClickGesture`、实验性「滑动 + 直接点击」等新功能。
+
+> ⚠️ 合并后必须重新跑 CI 编译与出 APK（上游 Kotlin 全量重编译），并重新真机确认 VR 入口、
+> 串流画面与透视窗口未受影响。`v0.7.0` 正式版仍是合并前、已真机验证的稳定基线。
 
 ### 骨架刻意做成的「零影响」特性
 
@@ -492,7 +536,10 @@ RGBA 纹理，清黑，然后把 viewport 设成比屏幕大 `zoomScale` 倍并�
    `samplerExternalOES + uSTMatrix`，根本没有这个 uniform。`5542a60` 曾把它设成 `1.0f`
    想修串流上下翻转，结果**只把基础 UI 翻了 180°、串流一点没修**（见 `HANDOFF.md` §13），
    现已回退 `0.0f`。串流朝向请用「串流左右镜像 / 串流上下翻转」两个开关调整。
-8. 上游 2.3.8 来自应用内更新接口而非 GitHub tag，目前无可合并公开源码，适配受阻（见计划书 12.3）。
+8. **上游源码已合并到 2.3.8**（官方 `OpenNOW` 的 `android-native` 分支，见 §2.1 / `HANDOFF.md` §24）。
+   更早的「2.3.8 无可合并公开源码」结论已被证伪：那只适用于 fork 仓库与应用内更新接口。
+   应用内更新接口当前已是 **2.4.1**，公开源码仍停在 2.3.8 —— 因此**再往后的版本依旧没有可合并源码**，
+   不要靠改 `versionName` 冒充适配。
 9. **串流开始后才进入 VR（中途切换）暂不可用**：解码器类型在会话创建时一次性选定，
    `SurfaceOrTextureVideoDecoder` 只支持 surface→texture 单向回退，VR 的 `SurfaceTexture`
    此时没有解码器消费，只剩 2D 状态面板。**先进 VR 再开始串流**的路径可用。

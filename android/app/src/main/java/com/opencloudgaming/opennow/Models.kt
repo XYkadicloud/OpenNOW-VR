@@ -218,9 +218,8 @@ data class StreamSettings(
     val sessionProxyUrl: String = "",
     val enableL4S: Boolean = false,
     val experimentalNvst: Boolean = false,
-    /** Opt in to the browser CloudMatch identity. Defaults ON so NVIDIA CloudMatch (post-2026-10-27)
-     *  always hands back a WebRTC endpoint instead of the dead RTSP allocation. */
-    val browserClientMode: Boolean = true,
+    /** Opt in to the browser CloudMatch identity for the next NVIDIA session. */
+    val browserClientMode: Boolean = false,
     val experimentalDynamicNetworkAdjustment: Boolean = false,
     val experimentalDynamicMinimumBitrateMbps: Int = 5,
     val mouseSensitivity: Float = 1f,
@@ -477,6 +476,8 @@ data class AndroidTouchSettings(
     val rightOffsetXDp: Float = 0f,
     val rightOffsetYDp: Float = 0f,
     val mouseDirectClick: Boolean = false,
+    /** Opt-in: relative slides and completed double taps for absolute clicks. */
+    val experimentalSlideDirectClick: Boolean = false,
     val nativeTouchMode: NativeTouchMode = NativeTouchMode.Auto,
     /**
      * Records an explicit Native Touch choice for compatibility with older saved settings. Auto is
@@ -789,6 +790,11 @@ internal fun streamResolutionPixels(settings: StreamSettings): Pair<Int, Int> {
 
 internal fun StreamSettings.requiresNativeAndroidCloudMatchMode(): Boolean =
     streamResolutionPixels(this) == parseResolutionPixels(PORTAL_STREAM_RESOLUTION)
+
+/** Use desktop WebRTC only for profiles outside the mobile mode matrix. */
+internal fun StreamSettings.prefersDesktopWebRtcCloudMatchMode(): Boolean =
+    !experimentalNvst && !requiresNativeAndroidCloudMatchMode() &&
+        requiresNativeDesktopCloudMatchMode() && (browserClientMode || !hdrEnabled)
 
 internal fun StreamSettings.requiresNativeDesktopCloudMatchMode(): Boolean {
     val (width, height) = streamResolutionPixels(this)
